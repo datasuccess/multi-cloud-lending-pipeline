@@ -10,13 +10,32 @@ We deliberately stay narrow — **one source, one Lambda, no orchestration, no I
 
 A green Phase 1 PR means:
 
+**Functional**
 - [ ] `lambdas/loan_application_generator/` contains a working handler.
-- [ ] `lambdas/shared/` contains the Parquet writer + Faker bootstrap reused by future generators.
-- [ ] One manual `aws lambda invoke` produces a Parquet file at the documented S3 prefix.
+- [ ] `lambdas/shared/` contains Parquet writer, Faker bootstrap, manifest writer, runs-ledger writer, structured-logging setup — reused by future generators.
+- [ ] One manual `aws lambda invoke` produces: parquet + `.manifest.json` + `_SUCCESS` at the documented S3 prefix.
 - [ ] The Parquet file opens cleanly in `pyarrow` and matches the declared schema.
-- [ ] An EventBridge rule fires the Lambda on a schedule (cron once/hour for now — easy to disable).
-- [ ] `docs/01-aws-foundations.md` (this file) is finalised with the *real* names/ARNs we created.
-- [ ] Cost so far stays under **$1**.
+- [ ] EventBridge rule fires the Lambda daily at 03:00 UTC.
+
+**Monitoring** (see [`monitoring.md`](monitoring.md))
+- [ ] Powertools `Logger` + `Metrics` wired in handler.
+- [ ] At least 4 EMF metrics published (`rows_written`, `bytes_written`, `duration_ms`, `heartbeat`).
+- [ ] Post-write validation reads parquet back and asserts shape; failure ⇒ no `_SUCCESS`, alarm fires.
+- [ ] Pipeline runs ledger appends one JSONL line per invocation (success and failure).
+- [ ] 3 CW alarms wired: Lambda errors, low volume, freshness.
+- [ ] SNS topics `lending-alerts-p1-page` and `lending-alerts-p2-email` exist; email subscriptions confirmed.
+- [ ] Runbook entries exist for all 3 alarms in `lambdas/loan_application_generator/README.md`.
+- [ ] Manual chaos test: induce a validation failure → P1 alarm fires within 5 min.
+
+**Security** (see [`pii-handling.md`](pii-handling.md))
+- [ ] S3 bucket SSE-KMS via `alias/lending-pii`, bucket-key on, public access blocked.
+- [ ] Generator IAM role: `kms:Encrypt` only, scoped to its prefix.
+- [ ] `pii-loader-role` and `pii-investigator-role` defined (unused this phase).
+- [ ] CloudTrail data events enabled on the KMS key and S3 bucket.
+
+**Docs**
+- [ ] `docs/01-aws-foundations.md` (this file) finalised with the *real* names/ARNs we created.
+- [ ] Cost so far stays under **$2**.
 
 ## 2. Source data — `loan_applications`
 
@@ -82,6 +101,12 @@ Phase 1 creates these via the AWS CLI/console for hands-on learning. Each row in
 | CloudWatch log group  | `/aws/lambda/lending-loan-app-generator`          | Retention 7 days.                                       |
 | CloudTrail data event | KMS decrypt + S3 GetObject on raw                 | Audit trail for any PII unmasking. Required for Phase 4 workflow but the trail must start *now* — auditors care about gaps. |
 | AWS Budget alarm      | `lending-monthly-50usd`                           | Email at $50/mo project total.                          |
+| **SNS topic**         | `lending-alerts-p1-page`                          | High-severity alerts (Lambda errors, freshness, schema drift). Email subscription. |
+| **SNS topic**         | `lending-alerts-p2-email`                         | Low-volume warnings, cost warnings.                     |
+| **CW alarm**          | `lending-loan-app-errors`                         | `Errors >= 1` in 5 min → P1.                            |
+| **CW alarm**          | `lending-loan-app-freshness`                      | Custom metric `last_success_age_hours > 25` → P1.       |
+| **CW alarm**          | `lending-loan-app-low-volume`                     | Custom metric `rows_written < 10000` → P2.              |
+| **CW dashboard**      | `lending-pipeline`                                | One widget per source. Phase 1 fills loan_applications panel only. |
 
 ### 3.1 IAM policy — generator (least-privilege)
 
@@ -255,11 +280,19 @@ This contract lets us **backfill** by invoking with a past `ingest_date` — Pha
 
 ```
 s3://lending-raw-<account-id>/
-└── raw/
-    └── loan_applications/
-        └── ingest_date=2026-05-04/                 # Hive-style partition
-            └── 2026-05-04T13-00-00Z_<uuid>.parquet
+├── raw/
+│   └── loan_applications/
+│       └── ingest_date=2026-05-04/                                # Hive-style partition
+│           ├── 2026-05-04T03-00-00Z_<uuid>.parquet                # data
+│           ├── 2026-05-04T03-00-00Z_<uuid>.parquet.manifest.json  # sidecar (rows, bytes, schema_hash, …)
+│           └── _SUCCESS                                            # written LAST, atomic
+└── _pipeline_runs/
+    └── source=loan_applications/
+        └── year=2026/month=05/day=04/
+            └── run-<run_id>.jsonl                                  # one append per invocation
 ```
+
+The `_SUCCESS` marker + manifest sidecar pattern is documented in [`monitoring.md`](monitoring.md) §5.1; the runs ledger in §5.2. Downstream loaders (Snowflake `COPY`, Spectrum) **wait for `_SUCCESS`** — never read raw parquet without the marker.
 
 Why Hive-style? Athena, Spectrum, BigLake, and Snowflake all auto-discover Hive partitions. We get partition pruning for free in every warehouse.
 
@@ -300,25 +333,36 @@ The PR will land these in order so each step is independently verifiable:
 
 1. `lambdas/shared/faker_setup.py` + unit test.
 2. `lambdas/loan_application_generator/generator.py` (in-memory row generation) + unit tests.
-3. `lambdas/shared/parquet_writer.py` (write to local fs first, then `s3://`) + unit test.
-4. `lambdas/loan_application_generator/handler.py` glue.
-5. **Manual AWS provisioning** following section 3, ARNs captured in this doc.
-6. Build + publish the layer (section 4 recipe).
-7. `aws lambda update-function-code --zip-file fileb://function.zip`.
-8. `aws lambda invoke --function-name lending-loan-app-generator out.json` → expect 200 + S3 object exists.
-9. Create the EventBridge schedule, verify the next firing.
-10. Update this doc with real names/ARNs/timestamps. **PR ready.**
+3. `lambdas/shared/parquet_writer.py` (declared schema; write local first, then S3) + unit test.
+4. `lambdas/shared/manifest.py` (manifest builder, schema_hash helper, `_SUCCESS` writer) + unit test.
+5. `lambdas/shared/runs_ledger.py` (JSONL appender) + unit test.
+6. `lambdas/shared/observability.py` (Powertools Logger + Metrics setup, common dimensions).
+7. `lambdas/loan_application_generator/handler.py` — wires generator → writer → validator → manifest → success → ledger → metrics.
+8. Local end-to-end test (writing to a temp dir): every artefact lands in correct order; deliberately corrupt the parquet → assert no `_SUCCESS`.
+9. **Manual AWS provisioning** per §3 — KMS key, bucket+policy, IAM roles (3), Lambda fn + layer, SNS topics + email subs, CW alarms, dashboard. ARNs captured in this doc.
+10. Build + publish the layer (§4 recipe).
+11. `aws lambda update-function-code --zip-file fileb://function.zip`.
+12. `aws lambda invoke --function-name lending-loan-app-generator out.json` → expect 200 + parquet + manifest + `_SUCCESS` in S3 + JSONL line in `_pipeline_runs/`.
+13. **Chaos test**: deploy a build with a deliberate validation failure → confirm P1 alarm fires within 5 min, then revert.
+14. Create EventBridge schedule, verify next firing.
+15. **Backfill**: invoke for the last 14 days (`{"ingest_date":"YYYY-MM-DD"}` payload).
+16. Runbook entries for all 3 alarms in `lambdas/loan_application_generator/README.md`.
+17. Finalise this doc with real names/ARNs/timestamps. **PR ready for review.**
 
 ## 9. What we are NOT doing this phase
 
 So we don't get pulled sideways:
 
 - **No DLQ** — comes with multi-Lambda Phase 2.
-- **No Terraform** — manual now; codified in a dedicated infra phase later. (Karpathy: simplicity first.)
+- **No Terraform module** — manual via CLI; .tf blocks documented inline; Phase 2 lifts into a real module.
 - **No Iceberg** — Phase 3.
 - **No Snowflake / Redshift loads** — Phases 4–6.
-- **No alerting** — basic CloudWatch logs only.
+- **No anomaly-detection alarms** — only static-threshold and freshness alarms now; ML-based drift in Phase 8.
+- **No Lambda Insights extension** — defer to Phase 2 once we have multiple Lambdas to compare.
+- **No Slack/PagerDuty integration** — email-only on SNS now; Slack in Phase 8.
+- **No synthetic canary** — Phase 8.
 - **No schema registry** — schema lives in `parquet_writer.py` for now; Glue Catalog in Phase 3.
+- **No warehouse-side masking policies** — Phase 4 (the role *names* are reserved now though).
 
 ## 10. Cost estimate
 
@@ -438,7 +482,7 @@ What real teams do for a Lambda → S3 producer like this, and where we are on e
 | **Infrastructure as Code (Terraform)**             | ⚠️ manual CLI; .tf blocks documented inline   | **Phase 2: lift to Terraform module** (replays to dev/staging/prod) |
 | **CI: lint + test on PR**                          | ✅ ruff + pytest GitHub Action                | Phase 5: + dbt parse                               |
 | **Runbook for ops**                                 | ✅ `lambdas/loan_application_generator/README.md` | extended every phase                          |
-| **Monitoring / alerts**                            | ❌ basic CW logs only                         | Phase 8: CW alarms + email/SNS                     |
+| **Monitoring / alerts**                            | ✅ EMF metrics, 3 CW alarms, SNS P1/P2, manifest sidecar, runs ledger, post-write validation, runbooks | Phase 2: Lambda Insights, DLQ alarms, full dashboard ([`monitoring.md`](monitoring.md)) |
 | **Distributed tracing (X-Ray)**                    | ❌                                            | Phase 11 (multi-hop streaming)                     |
 | **Backfill tooling**                                | ✅ event-arg `ingest_date` accepts a date     | Phase 8: Airflow DAG with date-range param         |
 | **PII handling**                                    | ✅ realistic PII columns + KMS + role split  | Phase 4: warehouse masking policies + audited unmask workflow ([`pii-handling.md`](pii-handling.md)) |

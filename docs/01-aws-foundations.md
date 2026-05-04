@@ -20,59 +20,84 @@ A green Phase 1 PR means:
 
 ## 2. Source data — `loan_applications`
 
-One row per submitted application. **Immutable** at this stage — corrections come as new rows in later sources (`loan_decisions`, etc.). Schema:
+One row per submitted application. **Immutable** at this stage — corrections come as new rows in later sources (`loan_decisions`, etc.). Schema includes realistic PII so we can practise a real masking + unmasking workflow.
 
-| Column                  | Type            | Notes                                                          |
-|-------------------------|-----------------|----------------------------------------------------------------|
-| `application_id`        | `string` (UUID) | Source primary key.                                            |
-| `customer_id`           | `string` (UUID) | FK to `customers` (Phase 2).                                    |
-| `applied_at`            | `timestamp[us]` | UTC. Generator skews to business hours but allows nights.       |
-| `amount_requested`      | `decimal(12,2)` | $1k–$50k, log-normal distribution.                              |
-| `term_months`           | `int8`          | One of {12, 24, 36, 48, 60}.                                    |
-| `purpose`               | `string`        | enum: debt_consolidation, home_improvement, auto, medical, other. |
-| `channel`               | `string`        | enum: web, mobile, branch, partner.                             |
-| `employment_status`     | `string`        | enum: employed, self_employed, unemployed, retired.             |
-| `annual_income`         | `decimal(12,2)` | Faker-generated, conditional on `employment_status`.            |
-| `existing_debt`         | `decimal(12,2)` | 0 to 5x annual income, biased low.                              |
-| `state`                 | `string`        | US state code.                                                  |
-| `country`               | `string`        | ISO-2; mostly US, ~10% non-US to make geo dims interesting.      |
-| `ip_address`            | `string`        | Faker IPv4.                                                     |
-| `user_agent`            | `string`        | Faker UA. Used later for device classification.                 |
-| `referrer_source`       | `string`        | utm_source-like; null ~30%.                                     |
-| `declared_purpose_text` | `string`        | Free-text; null ~50%.                                           |
-| `status`                | `string`        | At submission always "submitted". Later sources mutate.         |
-| `_generator_version`    | `string`        | e.g. `"loan_app/0.1.0"`. Lets us evolve the schema cleanly.     |
-| `_ingest_at`            | `timestamp[us]` | When the Lambda wrote the file.                                 |
+### 2.1 Columns
+
+PII column = highlighted in **PII type** column (DI=direct identifier, QI=quasi-identifier, blank=non-PII). Faker generates synthetic but realistic-looking values; SSNs / cards use Faker's test-range generators that can't collide with real values.
+
+| Column                  | Type            | PII type | Notes                                                              |
+|-------------------------|-----------------|----------|--------------------------------------------------------------------|
+| `application_id`        | `string` (UUID) |          | Source primary key.                                                |
+| `customer_id`           | `string` (UUID) |          | Pseudonymous; FK to `customers` (Phase 2).                         |
+| `applied_at`            | `timestamp[us]` |          | UTC. Distributed across the 24h preceding the run, business-hours skew. |
+| `first_name`            | `string`        | **DI**   | Faker `first_name()`.                                              |
+| `last_name`             | `string`        | **DI**   | Faker `last_name()`.                                               |
+| `email`                 | `string`        | **DI**   | Faker `email()`.                                                   |
+| `phone`                 | `string`        | **DI**   | Faker `phone_number()`, E.164-ish.                                 |
+| `date_of_birth`         | `date32`        | **QI**   | 18–80 range; quasi because age + zip can re-identify.              |
+| `ssn`                   | `string`        | **DI**   | Faker `ssn()` — uses test ranges (9XX-XX-XXXX) by design.          |
+| `gov_id_type`           | `string`        |          | enum: drivers_license, passport, state_id.                         |
+| `gov_id_number`         | `string`        | **DI**   | Faker; format depends on `gov_id_type`.                            |
+| `street_address`        | `string`        | **DI**   | Faker `street_address()`.                                          |
+| `city`                  | `string`        | **DI**   | Faker `city()`.                                                    |
+| `state`                 | `string`        | **QI**   | US state code.                                                     |
+| `zip`                   | `string`        | **QI**   | Faker `zipcode()`.                                                 |
+| `country`               | `string`        | **QI**   | ISO-2; mostly US, ~10% non-US.                                     |
+| `ip_address`            | `string`        | **DI**   | Faker IPv4. Counts as PII under GDPR.                              |
+| `user_agent`            | `string`        | **QI**   | Quasi via device-fingerprinting risk.                              |
+| `amount_requested`      | `decimal(12,2)` |          | $1k–$50k, log-normal distribution.                                 |
+| `term_months`           | `int8`          |          | One of {12, 24, 36, 48, 60}.                                       |
+| `purpose`               | `string`        |          | enum: debt_consolidation, home_improvement, auto, medical, other.  |
+| `channel`               | `string`        |          | enum: web, mobile, branch, partner.                                |
+| `employment_status`     | `string`        |          | enum: employed, self_employed, unemployed, retired.                |
+| `annual_income`         | `decimal(12,2)` |          | Conditional on `employment_status`.                                |
+| `existing_debt`         | `decimal(12,2)` |          | 0 to 5× annual income, biased low.                                 |
+| `referrer_source`       | `string`        |          | utm_source-like; null ~30%.                                        |
+| `declared_purpose_text` | `string`        |          | Free-text; null ~50%. May contain accidental PII — flagged.        |
+| `status`                | `string`        |          | At submission always "submitted". Later sources mutate.            |
+| `_generator_version`    | `string`        |          | e.g. `"loan_app/0.1.0"`.                                           |
+| `_ingest_at`            | `timestamp[us]` |          | When the Lambda wrote the file.                                    |
 
 **Why explicit decimals not floats?** Money should never round. Redshift, Snowflake, and BigQuery all map `decimal` predictably; floats give you `0.1 + 0.2` surprises in marts.
 
-## 3. AWS resources (manual for now, Terraform in a later phase)
+**Why store unmasked PII at all?** Because real lending operations need it: KYC, fraud investigation, regulatory reporting, customer support. The right pattern is **encrypt + mask + audit + workflow-gated unmasking** — not "don't collect it." The full strategy lives in [`docs/pii-handling.md`](pii-handling.md). Phase 1 establishes the **storage** half (KMS, role split); Phase 4 wires the **masking** half in the warehouse.
 
-| Resource           | Name                                              | Purpose                                                 |
-|--------------------|---------------------------------------------------|---------------------------------------------------------|
-| S3 bucket          | `lending-raw-<account-id>` (us-east-1)            | Lake. Versioning **off** for now (raw is append-only).  |
-| Lambda function    | `lending-loan-app-generator`                      | Generates a batch and writes one Parquet object.        |
-| IAM role           | `lending-loan-app-generator-role`                 | Lambda execution role.                                  |
-| IAM policy         | `lending-loan-app-generator-policy` (inline)      | `s3:PutObject` on the bucket prefix only.               |
-| Lambda layer       | `lending-pyarrow-layer` (Python 3.11, ARM64)      | Bundles `pyarrow`, `faker`. Keeps fn code small.        |
-| EventBridge rule   | `lending-loan-app-hourly`                         | `cron(0 * * * ? *)` — top of every hour.                |
-| CloudWatch log grp | `/aws/lambda/lending-loan-app-generator`          | Default; retain 7 days.                                 |
+## 3. AWS resources (manual now, Terraform-equivalent shown for Phase 2 lift)
 
-We will **not** create yet: SQS DLQ, Lambda destinations, X-Ray, custom KMS key, VPC config. Phase 2 adds DLQ + observability.
+Phase 1 creates these via the AWS CLI/console for hands-on learning. Each row includes the equivalent Terraform block so Phase 2's "lift to IaC" is mechanical — same names, same parameters, just declarative. Once Terraformed, the same module deploys to dev/staging/prod by changing `var.environment`.
 
-### IAM policy (least-privilege starting point)
+| Resource              | Name                                              | Purpose                                                 |
+|-----------------------|---------------------------------------------------|---------------------------------------------------------|
+| **KMS key**           | alias `alias/lending-pii`                         | Encrypts S3 raw, future Snowflake/Redshift Iceberg PII fields. |
+| S3 bucket             | `lending-raw-<account-id>` (us-east-1)            | Lake. SSE-KMS (`alias/lending-pii`). Versioning off.   |
+| S3 bucket policy      | inline                                            | Deny non-TLS, deny non-KMS writes.                      |
+| Lambda function       | `lending-loan-app-generator`                      | Generates a daily batch, writes one Parquet object.    |
+| IAM role              | `lending-loan-app-generator-role`                 | Lambda execution role.                                  |
+| IAM policy (inline)   | `lending-loan-app-generator-policy`               | `s3:PutObject` + `kms:GenerateDataKey` on its prefix.   |
+| **IAM role**          | `lending-pii-loader-role`                         | For the future warehouse loader (Snowflake/RS service). Read raw + decrypt KMS. Created now, used Phase 4. |
+| **IAM role**          | `lending-pii-investigator-role`                   | For audited human access. Read raw + decrypt KMS. **Assume only via MFA + time-bounded STS session.** Created now, used Phase 4. |
+| Lambda layer          | `lending-pyarrow-layer` (Python 3.11, ARM64)      | Bundles `pyarrow`, `faker`, `aws_lambda_powertools`.    |
+| EventBridge rule      | `lending-loan-app-daily`                          | `cron(0 3 * * ? *)` — daily at 03:00 UTC.               |
+| CloudWatch log group  | `/aws/lambda/lending-loan-app-generator`          | Retention 7 days.                                       |
+| CloudTrail data event | KMS decrypt + S3 GetObject on raw                 | Audit trail for any PII unmasking. Required for Phase 4 workflow but the trail must start *now* — auditors care about gaps. |
+| AWS Budget alarm      | `lending-monthly-50usd`                           | Email at $50/mo project total.                          |
+
+### 3.1 IAM policy — generator (least-privilege)
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    {
-      "Effect": "Allow",
+    { "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:AbortMultipartUpload"],
       "Resource": "arn:aws:s3:::lending-raw-<account-id>/raw/loan_applications/*"
     },
-    {
-      "Effect": "Allow",
+    { "Effect": "Allow",
+      "Action": ["kms:GenerateDataKey", "kms:Encrypt"],
+      "Resource": "arn:aws:kms:us-east-1:<account-id>:key/<key-id>"
+    },
+    { "Effect": "Allow",
       "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
       "Resource": "arn:aws:logs:us-east-1:<account-id>:log-group:/aws/lambda/lending-loan-app-generator:*"
     }
@@ -80,7 +105,90 @@ We will **not** create yet: SQS DLQ, Lambda destinations, X-Ray, custom KMS key,
 }
 ```
 
-Plus the AWS-managed `AWSLambdaBasicExecutionRole` for log-group creation.
+Note: the generator gets **encrypt-only** on KMS, never `kms:Decrypt`. It can write but cannot read back what it wrote.
+
+### 3.2 Terraform equivalents (reference — applied in Phase 2)
+
+```hcl
+# infra/terraform/02-s3/main.tf  (Phase 2)
+resource "aws_kms_key" "lending_pii" {
+  description             = "Lending project PII envelope key"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  tags                    = local.common_tags
+}
+
+resource "aws_kms_alias" "lending_pii" {
+  name          = "alias/lending-pii"
+  target_key_id = aws_kms_key.lending_pii.id
+}
+
+resource "aws_s3_bucket" "raw" {
+  bucket = "lending-raw-${data.aws_caller_identity.current.account_id}"
+  tags   = local.common_tags
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "raw" {
+  bucket = aws_s3_bucket.raw.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.lending_pii.arn
+    }
+    bucket_key_enabled = true   # cuts KMS API calls ~99%
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "raw" {
+  bucket                  = aws_s3_bucket.raw.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "deny_insecure" {
+  bucket = aws_s3_bucket.raw.id
+  policy = data.aws_iam_policy_document.deny_insecure.json
+}
+
+# infra/terraform/04-lambda/main.tf  (Phase 2)
+resource "aws_lambda_function" "loan_app_generator" {
+  function_name                  = "lending-loan-app-generator"
+  role                           = aws_iam_role.generator.arn
+  package_type                   = "Zip"
+  filename                       = "${path.module}/build/function.zip"
+  handler                        = "handler.lambda_handler"
+  runtime                        = "python3.11"
+  architectures                  = ["arm64"]
+  memory_size                    = 512
+  timeout                        = 60
+  reserved_concurrent_executions = 2
+  layers                         = [aws_lambda_layer_version.pyarrow.arn]
+  environment {
+    variables = {
+      RAW_BUCKET     = aws_s3_bucket.raw.id
+      LOG_LEVEL      = "INFO"
+      POWERTOOLS_SERVICE_NAME = "loan-app-generator"
+    }
+  }
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_event_rule" "loan_app_daily" {
+  name                = "lending-loan-app-daily"
+  schedule_expression = "cron(0 3 * * ? *)"
+}
+```
+
+The `local.common_tags` map (`Project=lending`, `ManagedBy=terraform`, etc.) lives in `infra/terraform/00-state-backend/locals.tf`.
+
+### 3.3 Schedule
+
+`cron(0 3 * * ? *)` → fires once per day at **03:00 UTC**. Each invocation:
+1. Generates **12,000** rows (= 500/hr × 24h) with `applied_at` distributed across the previous 24 hours, business-hours skewed (peak 10:00–18:00 local US time, dimmer at nights/weekends).
+2. Writes one Parquet file to `ingest_date=YYYY-MM-DD/`, where `YYYY-MM-DD` = the date of the run (UTC).
+3. Logs structured JSON: `{rows, bytes, s3_key, duration_ms, run_id}`.
 
 ## 4. Lambda packaging — choice
 
@@ -214,22 +322,29 @@ So we don't get pulled sideways:
 
 ## 10. Cost estimate
 
-| Item                                  | Monthly estimate                                  |
-|---------------------------------------|---------------------------------------------------|
-| Lambda invocations (24/day, ARM64)    | ~720/mo × ~200 ms × 256 MB ≈ **<$0.01**           |
-| S3 PUT (24/day)                       | ~720/mo × $0.005/1k = **<$0.01**                  |
-| S3 storage (~10 MB/day Parquet)       | ~300 MB after a month × $0.023/GB = **<$0.01**    |
-| CloudWatch logs (7-day retention)     | ~5 MB/day × $0.50/GB = **<$0.01**                 |
-| **Total Phase 1**                     | **<$0.05/month**                                  |
+| Item                                          | Monthly estimate                                   |
+|-----------------------------------------------|----------------------------------------------------|
+| Lambda invocations (1/day, ARM64, ~5s, 512MB) | 30/mo × 5s × 512 MB ≈ **<$0.01**                   |
+| S3 PUT (1/day)                                | 30/mo × $0.005/1k = **<$0.01**                     |
+| S3 storage (~3 MB/day Parquet, 12k rows)      | ~100 MB after a month × $0.023/GB = **<$0.01**     |
+| KMS key                                       | $1/mo + $0.03/10k requests; bucket-key cuts requests **~99%** → **~$1.05** |
+| CloudWatch logs (7-day retention)             | ~5 MB/day × $0.50/GB = **<$0.01**                  |
+| CloudTrail (data events on KMS+S3)            | Free for first trail, then $0.10/100k events → **<$0.10** |
+| **Total Phase 1**                             | **~$1.20/month**                                   |
 
 Set the AWS budget alarm at **$50/mo total project** *before* running anything.
 
-## 11. Open decisions (resolve in PR)
+## 11. Decisions resolved at kickoff
 
-- AWS region: **us-east-1** (cheapest; same region as future BigQuery transfer source).
-- Account: same one used for `iot-fleet-monitor`? Confirm at PR time.
-- How many rows per invocation? Default **500/hour** for now. Tunable via event payload.
-- Backfill plan: invoke loop over the last 14 days at PR time so dbt has data to chew on in later phases.
+| # | Decision                | Choice                                                                                  |
+|---|-------------------------|-----------------------------------------------------------------------------------------|
+| 1 | AWS region              | `us-east-1`                                                                             |
+| 2 | AWS account             | Same one used by `iot-fleet-monitor` (confirm at first `aws sts get-caller-identity`).  |
+| 3 | Volume                  | **12,000 rows/day** = 500/hr × 24h, generated as ONE daily file.                         |
+| 4 | Schedule                | EventBridge `cron(0 3 * * ? *)` — once daily at 03:00 UTC.                               |
+| 5 | PII strategy            | Real PII columns + KMS encryption + role split now; warehouse masking + audit Phase 4.   |
+| 6 | Terraform               | Manual CLI for Phase 1 (learning); lift to Terraform module in Phase 2 with no behavioural change. |
+| 7 | Backfill                | At end of Phase 1, run a loop invoking the Lambda for the last **14 days** so dbt has history to model. |
 
 ## 12. Learning checkpoints
 
@@ -307,7 +422,7 @@ What real teams do for a Lambda → S3 producer like this, and where we are on e
 | **Correlation / request IDs in logs**              | ✅ from Powertools                           | —                                                  |
 | **CloudWatch retention set explicitly**            | ✅ 7 days (saves $)                          | Phase 8: 30 days when we wire alarms               |
 | **Resource tags for cost allocation**              | ✅ `Project=lending`, `Phase=1`, `Owner=…`   | —                                                  |
-| **S3 default encryption**                           | ✅ SSE-S3 (AES-256) on bucket creation        | Phase 4: SSE-KMS w/ customer key for prod-like     |
+| **S3 default encryption**                           | ✅ **SSE-KMS** with `alias/lending-pii`, bucket-key on | —                                       |
 | **S3 block-public-access**                         | ✅ All four blocks ON                         | —                                                  |
 | **S3 versioning**                                  | ❌ off — raw is append-only by design         | Reconsider only if compliance demands it           |
 | **S3 lifecycle (raw → IA → Glacier)**              | ❌ off — too little data to matter            | Phase 10 cost-retro: enable when raw > 1 GB        |
@@ -320,13 +435,13 @@ What real teams do for a Lambda → S3 producer like this, and where we are on e
 | **Versioned generator (`_generator_version`)**    | ✅                                            | —                                                  |
 | **Reproducible Lambda layer build**                | ✅ Docker SAM-builder image (deterministic)  | Phase 2: CI-built artefact                         |
 | **Secrets via AWS Secrets Manager, not env vars** | ✅ pattern established                        | Phase 4 onward as actual creds appear              |
-| **Infrastructure as Code (Terraform)**             | ❌ manual via CLI for learning                | Dedicated infra phase later                        |
+| **Infrastructure as Code (Terraform)**             | ⚠️ manual CLI; .tf blocks documented inline   | **Phase 2: lift to Terraform module** (replays to dev/staging/prod) |
 | **CI: lint + test on PR**                          | ✅ ruff + pytest GitHub Action                | Phase 5: + dbt parse                               |
 | **Runbook for ops**                                 | ✅ `lambdas/loan_application_generator/README.md` | extended every phase                          |
 | **Monitoring / alerts**                            | ❌ basic CW logs only                         | Phase 8: CW alarms + email/SNS                     |
 | **Distributed tracing (X-Ray)**                    | ❌                                            | Phase 11 (multi-hop streaming)                     |
 | **Backfill tooling**                                | ✅ event-arg `ingest_date` accepts a date     | Phase 8: Airflow DAG with date-range param         |
-| **PII handling**                                    | ⚠️ generated data — no real PII             | Phase 4: column-level masking in dbt staging       |
+| **PII handling**                                    | ✅ realistic PII columns + KMS + role split  | Phase 4: warehouse masking policies + audited unmask workflow ([`pii-handling.md`](pii-handling.md)) |
 
 The pattern is deliberate: every "Later" item has a phase. Nothing is hand-waved. If something doesn't have a phase, we either decided we don't need it or it's an honest gap to surface.
 

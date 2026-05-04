@@ -281,7 +281,79 @@ feature/phase-N-<short>
 
 ---
 
-## 14. Next action
+## 14. Critical points (the TL;DR you should memorise)
 
-1. Create branches: `dev` (off `main`) and `feature/phase-1-loan-app-generator` (off `dev`). Push both.
-2. Wait for "go phase 1 code" before touching any Lambda code.
+The non-negotiables of this phase. If a future change breaks one of these, push back.
+
+- **Idempotency by partition.** Re-running the Lambda for the same `ingest_date` overwrites the partition's contents (DELETE-by-prefix → re-write), never produces duplicates downstream.
+- **Write-time partitioning, not event-time.** Path uses `ingest_date=` (when we *received* the row), not `applied_date=`. Late events still land in today's partition; logical time comes from the column.
+- **Schema is a contract, not an inference.** We declare an explicit `pyarrow.Schema`. We never let pandas guess. Wrong inference = silently broken decimals or null/string drift.
+- **Decimals for money, always.** No `float`. No `double`. `decimal(12,2)`.
+- **UTC everywhere.** Lambda env, generator, S3 timestamps, partition dates. Localisation is a presentation concern, not a storage one.
+- **Generator version stamped in every row.** `_generator_version="loan_app/0.1.0"`. When we change the schema, we bump the version and downstream knows where the discontinuity is.
+- **Least-privilege IAM.** The Lambda role can `s3:PutObject` on **only** its prefix. Not the whole bucket. Not other prefixes.
+- **ARM64 + Python 3.11.** ~20% cheaper than x86, longer support window than 3.9/3.10.
+- **Realistic distributions, not uniform random.** Log-normal incomes, weighted purposes, skewed business hours. If the data is too clean, the dashboards lie.
+- **Backfill is a first-class capability.** Handler accepts `ingest_date` in the event payload from day one. We don't bolt it on later.
+- **Cost alarm before resources.** Budget set to **$50/month** in AWS Budgets *before* any Lambda invocation runs.
+
+## 15. Production practices — what we apply *now* vs *later*
+
+What real teams do for a Lambda → S3 producer like this, and where we are on each axis. The "Now" column is what Phase 1 must include; the "Later" column links to the phase that adds it.
+
+| Practice                                            | Now (Phase 1)                                | Later                                              |
+|-----------------------------------------------------|----------------------------------------------|----------------------------------------------------|
+| **Structured (JSON) logging**                       | ✅ `aws_lambda_powertools.Logger` from line 1 | —                                                  |
+| **Correlation / request IDs in logs**              | ✅ from Powertools                           | —                                                  |
+| **CloudWatch retention set explicitly**            | ✅ 7 days (saves $)                          | Phase 8: 30 days when we wire alarms               |
+| **Resource tags for cost allocation**              | ✅ `Project=lending`, `Phase=1`, `Owner=…`   | —                                                  |
+| **S3 default encryption**                           | ✅ SSE-S3 (AES-256) on bucket creation        | Phase 4: SSE-KMS w/ customer key for prod-like     |
+| **S3 block-public-access**                         | ✅ All four blocks ON                         | —                                                  |
+| **S3 versioning**                                  | ❌ off — raw is append-only by design         | Reconsider only if compliance demands it           |
+| **S3 lifecycle (raw → IA → Glacier)**              | ❌ off — too little data to matter            | Phase 10 cost-retro: enable when raw > 1 GB        |
+| **Least-privilege IAM (resource-level ARNs)**     | ✅ as in §3                                   | —                                                  |
+| **Lambda concurrency limit**                       | ✅ reserved concurrency = 2 (anti-runaway)   | Phase 2: per-fn limits when we have 7              |
+| **Lambda timeout + memory tuned**                  | ✅ 60s / 512 MB starting; observe p99        | Re-tune in Phase 2 with real numbers               |
+| **Dead-letter queue (DLQ)**                        | ❌ no — single fn, single source              | Phase 2: SQS DLQ + redrive policy                  |
+| **Idempotency keys for the producer**              | ✅ via `ingest_date` partition replay-safety  | Phase 11: streaming will need at-most-once / dedup |
+| **Schema registry**                                | ❌ — schema lives in code                     | Phase 3: Glue Schema + Iceberg                     |
+| **Versioned generator (`_generator_version`)**    | ✅                                            | —                                                  |
+| **Reproducible Lambda layer build**                | ✅ Docker SAM-builder image (deterministic)  | Phase 2: CI-built artefact                         |
+| **Secrets via AWS Secrets Manager, not env vars** | ✅ pattern established                        | Phase 4 onward as actual creds appear              |
+| **Infrastructure as Code (Terraform)**             | ❌ manual via CLI for learning                | Dedicated infra phase later                        |
+| **CI: lint + test on PR**                          | ✅ ruff + pytest GitHub Action                | Phase 5: + dbt parse                               |
+| **Runbook for ops**                                 | ✅ `lambdas/loan_application_generator/README.md` | extended every phase                          |
+| **Monitoring / alerts**                            | ❌ basic CW logs only                         | Phase 8: CW alarms + email/SNS                     |
+| **Distributed tracing (X-Ray)**                    | ❌                                            | Phase 11 (multi-hop streaming)                     |
+| **Backfill tooling**                                | ✅ event-arg `ingest_date` accepts a date     | Phase 8: Airflow DAG with date-range param         |
+| **PII handling**                                    | ⚠️ generated data — no real PII             | Phase 4: column-level masking in dbt staging       |
+
+The pattern is deliberate: every "Later" item has a phase. Nothing is hand-waved. If something doesn't have a phase, we either decided we don't need it or it's an honest gap to surface.
+
+## 16. Why "one source first" (the answer to the multi-table question)
+
+Doing all 7 generators in Phase 1 looks faster but is slower in practice:
+
+1. **End-to-end before deep-and-narrow.** With one source we prove generator → writer → S3 → schedule → verification. The whole rail. Adding 6 more is then mechanical.
+2. **Pattern extraction.** `lambdas/shared/` only forms once we've actually written the code twice. Trying to design `shared/` for 7 sources before writing one = abstraction-without-evidence.
+3. **Cost containment.** A bug that runs every minute on 7 generators costs 7× more.
+4. **Review surface.** A 1-Lambda PR is reviewable in one sitting. A 7-Lambda PR is a stack of "looks fine I guess" review comments.
+
+Phase 2 lands the other six in roughly an evening — they're 90% the same code with different schemas.
+
+## 17. Glossary (one-liners for the terms in this doc)
+
+- **Terraform** — HashiCorp's Infrastructure-as-Code tool. Declarative `.tf` files describe cloud resources; `terraform plan` shows the diff, `terraform apply` makes it real. Not the same as **Teradata** (a legacy MPP warehouse vendor — irrelevant to this project).
+- **IaC (Infrastructure as Code)** — managing cloud resources through committed text files instead of console clicks.
+- **Lambda layer** — a zip of dependencies separate from the function code, mountable into multiple functions.
+- **EventBridge** — AWS's event bus + scheduler. Replaces the deprecated CloudWatch Events.
+- **Hive-style partitioning** — `key=value/` directory naming so query engines auto-discover partitions. Universally understood by Athena, Spectrum, Snowflake external tables, BigLake.
+- **MPP (Massively Parallel Processing)** — warehouse architecture where queries fan out across compute nodes. Redshift, Snowflake, BigQuery, Teradata all use MPP.
+- **DLQ (Dead Letter Queue)** — where failed events go when the main consumer can't process them. Usually SQS for Lambda.
+- **DPD (Days Past Due)** — bucketing late loans by how late: `1-30`, `31-60`, `61-90`, `90+`. Standard in lending dashboards.
+
+## 18. Next action
+
+1. Create branches: `dev` (off `main`) and `feature/phase-1-loan-app-generator` (off `dev`). Push both. ✅ done.
+2. Open this doc as a draft PR for review. ✅ done — PR #1.
+3. Wait for "go phase 1 code" before touching any Lambda code.

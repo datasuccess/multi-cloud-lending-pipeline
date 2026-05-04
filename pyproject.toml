@@ -6,14 +6,24 @@ requires-python = ">=3.11"
 readme = "README.md"
 
 # Per-phase dependencies are added as the phases land.
-# Phase 0 has no runtime deps.
-dependencies = []
+# Phase 1: Lambda generator stack (pyarrow + Faker + Powertools).
+dependencies = [
+    "pyarrow>=16,<17",
+    "faker>=25,<26",
+    "aws-lambda-powertools>=2.30",
+    "boto3>=1.28",
+]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.5",
     "pre-commit>=3.7",
+    "pytest>=8",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"

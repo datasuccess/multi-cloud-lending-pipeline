@@ -1,0 +1,27 @@
+[project]
+name = "multi-cloud-lending-pipeline"
+version = "0.0.1"
+description = "End-to-end ELT pipeline for a consumer-lending platform across Redshift, Snowflake, and BigQuery on a shared Iceberg lakehouse."
+requires-python = ">=3.11"
+readme = "README.md"
+
+# Per-phase dependencies are added as the phases land.
+# Phase 0 has no runtime deps.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "pre-commit>=3.7",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

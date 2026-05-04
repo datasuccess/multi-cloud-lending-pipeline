@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version-local
+.uv/
+uv.lock
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.key
+secrets.toml
+.aws/
+.gcp/
+service-account*.json
+sa-*.json
+gcp-key*.json
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+profiles.yml
+
+# Lambda build artifacts
+lambdas/**/build/
+lambdas/**/*.zip
+lambdas/**/package/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Streamlit
+streamlit_app/.streamlit/secrets.toml
+
+# Test / cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage

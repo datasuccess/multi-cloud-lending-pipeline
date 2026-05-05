@@ -41,6 +41,9 @@ profiles.yml
 lambdas/**/build/
 lambdas/**/*.zip
 lambdas/**/package/
+build/
+infra/**/*.zip
+infra/lambda/build/
 
 # IDE / OS
 .vscode/

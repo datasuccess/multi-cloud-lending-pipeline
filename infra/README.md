@@ -29,9 +29,13 @@ chmod +x infra/*.sh infra/lambda/*.sh
 | 6 | `infra/03-invoke-and-backfill.sh smoke` | One manual invocation against today's partition | ~$0 |
 | 7 | `infra/03-invoke-and-backfill.sh verify` | Lists partitions + reads latest manifest + tail of runs ledger | $0 |
 | 8 | `infra/04-chaos-test.sh` | Forces validation failure (rows=5) → confirms no `_SUCCESS` + alarm fires | $0 |
-| 9 | `infra/03-invoke-and-backfill.sh backfill 14` | 14-day backfill so dbt has history in Phase 5 | ~$0 |
+| 9 | `infra/05-bootstrap-secrets.sh` | Creates `lending/dev/streamlit-config` in Secrets Manager | ~$0.40/mo (1 secret) |
+| 10 | `infra/06-set-mode.sh test` | Flips Lambda to hourly + anomaly engine on; lowers low-volume threshold to 400 | $0 |
+| 11 | `infra/03-invoke-and-backfill.sh backfill 14` | 14-day backfill so dbt has history in Phase 5 | ~$0 |
 
-Total Phase 1 monthly: **~$1.20**.
+Total Phase 1 monthly: **~$1.60**.
+
+> **Switching back to prod.** `infra/06-set-mode.sh prod` restores the daily 03:00 cron, disables the anomaly engine, and resets the alarm thresholds. See [`docs/anomaly-injection.md`](../docs/anomaly-injection.md) for the operating philosophy.
 
 ## Step-by-step
 
@@ -69,7 +73,14 @@ aws configure get region    # us-east-1
 
 #     After verifying, clean the chaos partition (commands printed by the script).
 
-# 11) Backfill 14 days.
+# 11) Bootstrap Secrets Manager (Streamlit config).
+./infra/05-bootstrap-secrets.sh
+
+# 12) Flip to test mode (hourly + anomaly engine on) so the monitoring stack
+#     gets exercised. After a day or two of runs, flip back: `./infra/06-set-mode.sh prod`.
+./infra/06-set-mode.sh test
+
+# 13) Backfill 14 days.
 ./infra/03-invoke-and-backfill.sh backfill 14
 ```
 

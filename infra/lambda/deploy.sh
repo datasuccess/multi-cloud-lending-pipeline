@@ -21,7 +21,9 @@ ZIP="${REPO_ROOT}/build/${LAMBDA_NAME}.zip"
 [[ -f "${ZIP}" ]] || die "Function zip missing: ${ZIP}. Run package-function.sh first."
 [[ -n "${LAYER_VERSION_ARN:-}" ]] || die "LAYER_VERSION_ARN missing. Run build-layer.sh first."
 
-ENV_VARS="Variables={RAW_BUCKET=${RAW_BUCKET},RAW_BUCKET_URI=${RAW_BUCKET_URI},LOG_LEVEL=INFO,POWERTOOLS_SERVICE_NAME=${POWERTOOLS_SERVICE_NAME},POWERTOOLS_METRICS_NAMESPACE=${POWERTOOLS_NAMESPACE},ROWS_PER_RUN=12000}"
+# Initial deploy is prod-shaped: anomaly engine off, daily cron, strict
+# 10k row floor. Switch to test mode (hourly + chaos) with `06-set-mode.sh test`.
+ENV_VARS="Variables={RAW_BUCKET=${RAW_BUCKET},RAW_BUCKET_URI=${RAW_BUCKET_URI},LOG_LEVEL=INFO,POWERTOOLS_SERVICE_NAME=${POWERTOOLS_SERVICE_NAME},POWERTOOLS_METRICS_NAMESPACE=${POWERTOOLS_NAMESPACE},ROWS_PER_RUN=12000,MIN_ROWS=10000,MODE=prod}"
 
 log "[1/3] Deploying Lambda ${LAMBDA_NAME}"
 if aws lambda get-function --function-name "${LAMBDA_NAME}" --region "${REGION}" >/dev/null 2>&1; then

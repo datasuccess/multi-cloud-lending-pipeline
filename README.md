@@ -4,7 +4,9 @@ End-to-end ELT pipeline for a consumer-lending platform, built to learn AWS Reds
 
 ## Status
 
-Phase **0** — repo scaffold. No cloud resources yet.
+Phase **1 (in progress)** — loan_applications Lambda generator + AWS Secrets Manager + Streamlit monitoring app + anomaly injection engine.
+
+Run order: [`RUNBOOK.md`](RUNBOOK.md).
 
 ## Architecture (target)
 

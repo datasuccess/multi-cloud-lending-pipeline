@@ -208,12 +208,21 @@ resource "aws_cloudwatch_event_rule" "loan_app_daily" {
 
 The `local.common_tags` map (`Project=lending`, `ManagedBy=terraform`, etc.) lives in `infra/terraform/00-state-backend/locals.tf`.
 
-### 3.3 Schedule
+### 3.3 Schedule (mode-aware)
 
-`cron(0 3 * * ? *)` → fires once per day at **03:00 UTC**. Each invocation:
-1. Generates **12,000** rows (= 500/hr × 24h) with `applied_at` distributed across the previous 24 hours, business-hours skewed (peak 10:00–18:00 local US time, dimmer at nights/weekends).
+A single Lambda env var `MODE` (set by `infra/06-set-mode.sh`) controls both the EventBridge cron and the anomaly engine:
+
+| `MODE` | Cron                  | Cadence | Rows/run | `MIN_ROWS` | Anomaly engine | Low-volume threshold |
+|--------|-----------------------|---------|----------|------------|----------------|----------------------|
+| `prod` | `cron(0 3 * * ? *)`   | daily 03:00 UTC | 12,000 | 10,000 | off — deterministic | 10,000 |
+| `test` | `cron(0 * * * ? *)`   | every hour | 2,000 | 1 | on — see [`anomaly-injection.md`](anomaly-injection.md) | 400 |
+
+Each invocation:
+1. Generates rows with `applied_at` distributed across the previous 24 hours, business-hours skewed (peak 10:00–18:00 local US time).
 2. Writes one Parquet file to `ingest_date=YYYY-MM-DD/`, where `YYYY-MM-DD` = the date of the run (UTC).
-3. Logs structured JSON: `{rows, bytes, s3_key, duration_ms, run_id}`.
+3. Logs structured JSON: `{rows, bytes, s3_key, duration_ms, run_id, anomaly?}`.
+
+Test mode exists so we can exercise every CW alarm without manually corrupting state — the engine rolls a die per run and produces missing/short/failing/slow runs at known probabilities. Production runs roll no dice and never sleep.
 
 ## 4. Lambda packaging — choice
 

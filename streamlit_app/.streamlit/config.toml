@@ -1,0 +1,11 @@
+[server]
+headless = true
+runOnSave = true
+
+[theme]
+base = "dark"
+primaryColor = "#3FB950"
+font = "monospace"
+
+[browser]
+gatherUsageStats = false

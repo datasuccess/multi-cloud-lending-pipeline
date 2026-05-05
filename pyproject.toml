@@ -20,6 +20,12 @@ dev = [
     "pre-commit>=3.7",
     "pytest>=8",
 ]
+# Local-only stack for the monitoring app — never bundled into the Lambda zip.
+streamlit = [
+    "streamlit>=1.32",
+    "pandas>=2.1",
+    "plotly>=5.20",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

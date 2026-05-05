@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from lambdas.loan_application_generator import handler as h
+from lambdas.shared.anomaly import Anomaly
 from lambdas.shared.parquet_writer import read_parquet
 
 
@@ -92,3 +93,86 @@ def test_handler_validation_failure_blocks_success(tmp_path, monkeypatch):
     record = json.loads(ledger_files[0].read_text().strip())
     assert record["status"] == "failure"
     assert "too few rows" in record["error"]
+
+
+def test_anomaly_skip_writes_no_artefacts(tmp_path):
+    """SKIP raises RunSkipped with no S3 writes — freshness alarm trips."""
+    base = tmp_path / "lake"
+
+    with pytest.raises(h.RunSkipped):
+        h.run(
+            base_uri=str(base),
+            rows_n=10_000,
+            seed=42,
+            ingest_date=h.date.fromisoformat("2026-05-04"),
+            trigger="test",
+            anomaly=Anomaly.SKIP,
+        )
+
+    # Lake is untouched — no partition, no ledger.
+    assert not (base / "raw").exists()
+    assert not (base / "_pipeline_runs").exists()
+
+
+def test_anomaly_undershoot_writes_few_rows_and_succeeds(tmp_path, monkeypatch):
+    """UNDERSHOOT writes 100-450 rows; with MIN_ROWS=1 validation still passes."""
+    base = tmp_path / "lake"
+    monkeypatch.setattr(h, "MIN_ROWS", 1)
+
+    result = h.run(
+        base_uri=str(base),
+        rows_n=10_000,
+        seed=42,
+        ingest_date=h.date.fromisoformat("2026-05-04"),
+        trigger="test",
+        anomaly=Anomaly.UNDERSHOOT,
+    )
+
+    assert result.validation_passed is True
+    assert 100 <= result.rows <= 450  # rows_n was rewritten by undershoot
+
+    partition = _read_partition(base)
+    files = {p.name for p in partition.iterdir()}
+    assert "_SUCCESS" in files
+
+
+def test_anomaly_silent_fail_blocks_success(tmp_path):
+    """SILENT_FAIL appends a chaos error post-validation → no _SUCCESS."""
+    base = tmp_path / "lake"
+
+    with pytest.raises(h.ValidationFailed) as exc_info:
+        h.run(
+            base_uri=str(base),
+            rows_n=10_000,
+            seed=42,
+            ingest_date=h.date.fromisoformat("2026-05-04"),
+            trigger="test",
+            anomaly=Anomaly.SILENT_FAIL,
+        )
+
+    result = exc_info.value.result
+    assert any("silent_fail" in e for e in result.validation_errors)
+
+    partition = _read_partition(base)
+    files = {p.name for p in partition.iterdir()}
+    assert any(f.endswith(".parquet") for f in files)
+    assert "_SUCCESS" not in files
+
+
+def test_anomaly_slow_sleeps_before_validation(tmp_path, monkeypatch):
+    """SLOW must call time.sleep(SLOW_SLEEP_SECONDS) — patch sleep so the test is fast."""
+    base = tmp_path / "lake"
+    sleeps: list[float] = []
+    monkeypatch.setattr(h.time, "sleep", lambda s: sleeps.append(s))
+
+    result = h.run(
+        base_uri=str(base),
+        rows_n=10_000,
+        seed=42,
+        ingest_date=h.date.fromisoformat("2026-05-04"),
+        trigger="test",
+        anomaly=Anomaly.SLOW,
+    )
+
+    assert sleeps == [h.SLOW_SLEEP_SECONDS]
+    assert result.validation_passed is True

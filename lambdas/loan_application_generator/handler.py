@@ -24,6 +24,7 @@ thin `lambda_handler` that decorates it with Powertools + reads env.
 from __future__ import annotations
 
 import os
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -34,6 +35,12 @@ from lambdas.loan_application_generator.generator import (
     GENERATOR_VERSION,
     SOURCE,
     make_rows,
+)
+from lambdas.shared.anomaly import (
+    Anomaly,
+    SLOW_SLEEP_SECONDS,
+    pick_anomaly,
+    undershoot_rows,
 )
 from lambdas.shared.manifest import build_manifest, write_manifest, write_success
 from lambdas.shared.observability import (
@@ -56,7 +63,10 @@ from lambdas.shared.storage import join
 from lambdas.shared.validation import validate_table
 
 DEFAULT_ROWS = 12_000
-MIN_ROWS = 10_000
+# Env-driven so test-mode deploys can lower this to let UNDERSHOOT (100-450
+# rows) pass validation and surface as a low-volume alarm instead of an
+# errors alarm. Prod keeps the strict 10k floor.
+MIN_ROWS = int(os.environ.get("MIN_ROWS", 10_000))
 
 logger = get_logger("loan-app-generator")
 metrics = get_metrics("loan-app-generator")
@@ -102,9 +112,24 @@ def run(
     ingest_date: date,
     trigger: str,
     lambda_request_id: str | None = None,
+    anomaly: Anomaly | None = None,
 ) -> RunResult:
     run_id = uuid4().hex
     started_at = datetime.now(timezone.utc)
+
+    if anomaly is None:
+        anomaly = pick_anomaly()
+    if anomaly is not Anomaly.NONE:
+        logger.append_keys(anomaly=anomaly.value)
+
+    if anomaly is Anomaly.SKIP:
+        # No S3 writes at all → no _SUCCESS, no manifest, no metrics. The
+        # freshness alarm trips after the missing-heartbeat window. Lambda
+        # still exits cleanly so the errors alarm is unaffected.
+        raise RunSkipped(run_id=run_id)
+
+    if anomaly is Anomaly.UNDERSHOOT:
+        rows_n = undershoot_rows()
 
     rows = make_rows(rows_n, ingest_date, seed=seed, ingest_at=started_at)
     table = rows_to_table(rows, LOAN_APPLICATIONS_SCHEMA)
@@ -117,6 +142,9 @@ def run(
 
     bytes_written = write_parquet(parquet_uri, table)
 
+    if anomaly is Anomaly.SLOW:
+        time.sleep(SLOW_SLEEP_SECONDS)
+
     table_back = read_parquet(parquet_uri)
     errors = validate_table(
         table_back,
@@ -124,6 +152,10 @@ def run(
         schema=LOAN_APPLICATIONS_SCHEMA,
         min_rows=MIN_ROWS,
     )
+    if anomaly is Anomaly.SILENT_FAIL:
+        # Force the no-_SUCCESS path even though parquet+manifest landed —
+        # exercises the errors alarm without corrupting validation logic.
+        errors = list(errors) + ["anomaly:silent_fail (chaos)"]
     validation_passed = not errors
 
     finished_at = datetime.now(timezone.utc)
@@ -200,6 +232,14 @@ class ValidationFailed(Exception):
         )
 
 
+class RunSkipped(Exception):
+    """Anomaly engine picked SKIP — no artefacts written, freshness alarm trips."""
+
+    def __init__(self, *, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"run skipped by anomaly injection: run_id={run_id}")
+
+
 @logger.inject_lambda_context(log_event=False)
 @metrics.log_metrics(capture_cold_start_metric=True)
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -217,14 +257,18 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
     logger.info("loan_app_generator.start", extra={"rows": rows_n, "trigger": trigger})
 
-    result = run(
-        base_uri=base_uri,
-        rows_n=rows_n,
-        seed=seed,
-        ingest_date=ingest_date,
-        trigger=trigger,
-        lambda_request_id=lambda_request_id,
-    )
+    try:
+        result = run(
+            base_uri=base_uri,
+            rows_n=rows_n,
+            seed=seed,
+            ingest_date=ingest_date,
+            trigger=trigger,
+            lambda_request_id=lambda_request_id,
+        )
+    except RunSkipped as exc:
+        logger.warning("loan_app_generator.skipped", extra={"run_id": exc.run_id})
+        return {"status": "skipped", "run_id": exc.run_id}
 
     logger.info(
         "loan_app_generator.success",
@@ -238,6 +282,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
 
     return {
+        "status": "success",
         "run_id": result.run_id,
         "parquet_uri": result.parquet_uri,
         "manifest_uri": result.manifest_uri,

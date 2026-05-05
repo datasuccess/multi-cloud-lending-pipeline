@@ -101,6 +101,17 @@ GEN_POLICY="$(cat <<JSON
       "Resource": "arn:aws:s3:::${RAW_BUCKET}/_pipeline_runs/source=loan_applications/*"
     },
     {
+      "Sid": "ListBucketForLedgerNoSuchKey",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::${RAW_BUCKET}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["_pipeline_runs/source=loan_applications/*"]
+        }
+      }
+    },
+    {
       "Sid": "EncryptOnly",
       "Effect": "Allow",
       "Action": ["kms:GenerateDataKey", "kms:Encrypt"],

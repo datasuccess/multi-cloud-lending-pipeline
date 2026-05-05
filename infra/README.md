@@ -22,7 +22,7 @@ chmod +x infra/*.sh infra/lambda/*.sh
 |---|---|---|---|
 | 0 | `infra/00-setup-foundations.sh` | AWS Budget @ $50/mo · KMS key + alias `alias/lending-pii` (rotation on) · S3 bucket `lending-raw-<acct>` (SSE-KMS, bucket-key, PAB, deny-insecure policy) | KMS ~$1/mo |
 | 1 | `infra/01-setup-iam.sh` | 3 IAM roles: generator (S3 PutObject + KMS Encrypt), pii-loader (Phase 4), pii-investigator (MFA-required, 4h max session) | $0 |
-| 2 | `infra/02-setup-monitoring.sh` | SNS P1+P2 topics + email subs · 3 alarms (errors/freshness/low-volume) · CW dashboard · CloudTrail data events on KMS+S3 | CloudTrail ~$0.10/mo |
+| 2 | `infra/02-setup-monitoring.sh` | SNS P1+P2 topics + email subs · 3 alarms (errors/freshness/low-volume) · CW dashboard · CloudTrail (S3 data events + management events incl. KMS) | CloudTrail ~$0.10/mo |
 | 3 | `infra/lambda/build-layer.sh` | Builds `lending-pyarrow-layer` (pyarrow + faker + powertools, ARM64 manylinux wheels) and publishes a layer version | $0 (S3 storage of zip is negligible) |
 | 4 | `infra/lambda/package-function.sh` | Zips just `lambdas/loan_application_generator/` + `lambdas/shared/` | $0 |
 | 5 | `infra/lambda/deploy.sh` | create-or-update Lambda, set concurrency=2, attach layer, log retention 7d, EventBridge rule `cron(0 3 * * ? *)` | invoked: ~$0.01/mo |

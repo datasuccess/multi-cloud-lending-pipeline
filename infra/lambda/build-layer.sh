@@ -11,6 +11,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${HERE}/../_env.sh"
+# Need KMS_KEY_ARN written by 00-setup-foundations.sh for the staging upload.
+[[ -f /tmp/lending-phase1-outputs.env ]] && source /tmp/lending-phase1-outputs.env
 
 REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
 WORK="${REPO_ROOT}/build/layer"
@@ -55,6 +57,19 @@ log "Zipping..."
 SIZE_MB="$(du -m "${ZIP}" | cut -f1)"
 log "Layer zip: ${ZIP} (${SIZE_MB} MB)"
 
+# Direct --zip-file upload caps at 70 MB after base64 expansion (~52 MB raw),
+# which pyarrow blows past. Stage in the raw bucket under _layers/ instead —
+# the deny-insecure + default SSE-KMS policies on the bucket cover us.
+S3_KEY="_layers/${LAMBDA_LAYER_NAME}-${PYARROW_VER}-${FAKER_VER}-${POWERTOOLS_VER}.zip"
+log "Staging layer to s3://${RAW_BUCKET}/${S3_KEY}"
+# Bucket policy denies PutObject without `x-amz-server-side-encryption: aws:kms`
+# even though default encryption is set, so pass --sse explicitly.
+aws s3 cp "${ZIP}" "s3://${RAW_BUCKET}/${S3_KEY}" \
+  --region "${REGION}" \
+  --sse aws:kms \
+  --sse-kms-key-id "${KMS_KEY_ARN}" \
+  --only-show-errors
+
 log "Publishing layer version..."
 LAYER_VERSION_ARN="$(aws lambda publish-layer-version \
   --layer-name "${LAMBDA_LAYER_NAME}" \
@@ -62,7 +77,7 @@ LAYER_VERSION_ARN="$(aws lambda publish-layer-version \
   --license-info "Apache-2.0" \
   --compatible-runtimes python3.11 \
   --compatible-architectures arm64 \
-  --zip-file "fileb://${ZIP}" \
+  --content "S3Bucket=${RAW_BUCKET},S3Key=${S3_KEY}" \
   --region "${REGION}" \
   --query 'LayerVersionArn' --output text)"
 log "Published ${LAYER_VERSION_ARN}"

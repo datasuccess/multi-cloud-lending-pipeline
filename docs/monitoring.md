@@ -38,7 +38,7 @@ P1 = page; P2 = email; P3 = ticket.
 | Freshness   | `last_success_age_hours` custom metric      | + per-source freshness alarms         | + `dbt source freshness` (Phase 5)       | + Streamlit "Pipeline Health" page (Phase 9) |
 | Quality     | Manifest sidecar + post-write validation    | + DLQ on validation fail              | + dbt tests (schema, not_null, unique, accepted_values, custom) | + Elementary or Soda layered on dbt          |
 | Business    | EMF dimensional metrics (by channel, etc.)  | + per-source metrics                  | + warehouse-side KPIs from marts         | + Streamlit business-KPI pages               |
-| Security    | CloudTrail data events on KMS+S3 (Phase 1)  | —                                      | + Snowflake/RS query-history snapshots   | + audit dashboard, off-hours alarms          |
+| Security    | CloudTrail S3 data events + KMS management events (Phase 1)  | —                                      | + Snowflake/RS query-history snapshots   | + audit dashboard, off-hours alarms          |
 
 Tools we **don't** use (and why):
 

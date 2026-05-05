@@ -40,6 +40,8 @@ if aws lambda get-function --function-name "${LAMBDA_NAME}" --region "${REGION}"
   aws lambda wait function-updated \
     --function-name "${LAMBDA_NAME}" --region "${REGION}"
 
+  # `update-function-configuration` doesn't accept --architectures; the value
+  # was fixed at create-time and is immutable post hoc.
   aws lambda update-function-configuration \
     --function-name "${LAMBDA_NAME}" \
     --runtime python3.11 \
@@ -47,7 +49,6 @@ if aws lambda get-function --function-name "${LAMBDA_NAME}" --region "${REGION}"
     --handler "lambdas.loan_application_generator.handler.lambda_handler" \
     --timeout 60 \
     --memory-size 512 \
-    --architectures arm64 \
     --environment "${ENV_VARS}" \
     --layers "${LAYER_VERSION_ARN}" \
     --region "${REGION}" \
@@ -56,10 +57,13 @@ if aws lambda get-function --function-name "${LAMBDA_NAME}" --region "${REGION}"
   aws lambda wait function-updated \
     --function-name "${LAMBDA_NAME}" --region "${REGION}"
 
+  # Reserved concurrency is best-effort: a fresh account starts with 10 total
+  # unreserved, and the API refuses to drop unreserved below 10. Skip silently.
   aws lambda put-function-concurrency \
     --function-name "${LAMBDA_NAME}" \
     --reserved-concurrent-executions 2 \
-    --region "${REGION}" >/dev/null
+    --region "${REGION}" >/dev/null 2>&1 \
+    || warn "       skipped reserved-concurrency=2 (account quota too small; non-fatal)"
 else
   log "       function does not exist — creating"
   aws lambda create-function \
@@ -80,10 +84,13 @@ else
   aws lambda wait function-active \
     --function-name "${LAMBDA_NAME}" --region "${REGION}"
 
+  # Reserved concurrency is best-effort: a fresh account starts with 10 total
+  # unreserved, and the API refuses to drop unreserved below 10. Skip silently.
   aws lambda put-function-concurrency \
     --function-name "${LAMBDA_NAME}" \
     --reserved-concurrent-executions 2 \
-    --region "${REGION}" >/dev/null
+    --region "${REGION}" >/dev/null 2>&1 \
+    || warn "       skipped reserved-concurrency=2 (account quota too small; non-fatal)"
 fi
 
 # Cap log retention at 7 days now that the log group exists.

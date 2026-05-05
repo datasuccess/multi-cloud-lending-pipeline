@@ -250,21 +250,28 @@ else
   log "       trail created"
 fi
 
-# Data events: KMS + S3 raw bucket. Advanced event selectors give per-resource
-# scoping, which keeps cost low.
+# Advanced event selectors:
+#   - One Data-event selector for S3 objects under the raw bucket. KMS
+#     `AWS::KMS::Key` is not a valid data-event resource type — KMS API
+#     calls (Encrypt / Decrypt / GenerateDataKey) are *management* events,
+#     so we capture them via a Management selector instead. Both come
+#     from the same trail; the audit dashboard in Phase 4 joins them.
 TMP_AES="$(mktemp)"
 cat > "${TMP_AES}" <<JSON
 [
   {
-    "Name": "PII-data-events",
+    "Name": "Management-events",
+    "FieldSelectors": [
+      {"Field": "eventCategory", "Equals": ["Management"]}
+    ]
+  },
+  {
+    "Name": "PII-data-events-S3",
     "FieldSelectors": [
       {"Field": "eventCategory", "Equals": ["Data"]},
-      {"Field": "resources.type", "Equals": ["AWS::S3::Object", "AWS::KMS::Key"]},
+      {"Field": "resources.type", "Equals": ["AWS::S3::Object"]},
       {"Field": "resources.ARN",
-       "StartsWith": [
-         "arn:aws:s3:::${RAW_BUCKET}/",
-         "${KMS_KEY_ARN}"
-       ]
+       "StartsWith": ["arn:aws:s3:::${RAW_BUCKET}/"]
       }
     ]
   }
@@ -277,7 +284,7 @@ aws cloudtrail put-event-selectors \
 rm -f "${TMP_AES}"
 
 aws cloudtrail start-logging --name "${CLOUDTRAIL_NAME}" --region "${REGION}"
-log "       trail logging enabled (data events on KMS + ${RAW_BUCKET})"
+log "       trail logging enabled (management + S3 data events on ${RAW_BUCKET})"
 
 cat >> /tmp/lending-phase1-outputs.env <<EOF
 SNS_P1_ARN=${SNS_P1_ARN}

@@ -382,7 +382,7 @@ So we don't get pulled sideways:
 | S3 storage (~3 MB/day Parquet, 12k rows)      | ~100 MB after a month × $0.023/GB = **<$0.01**     |
 | KMS key                                       | $1/mo + $0.03/10k requests; bucket-key cuts requests **~99%** → **~$1.05** |
 | CloudWatch logs (7-day retention)             | ~5 MB/day × $0.50/GB = **<$0.01**                  |
-| CloudTrail (data events on KMS+S3)            | Free for first trail, then $0.10/100k events → **<$0.10** |
+| CloudTrail (S3 data events + KMS management events)            | Free for first trail, then $0.10/100k events → **<$0.10** |
 | **Total Phase 1**                             | **~$1.20/month**                                   |
 
 Set the AWS budget alarm at **$50/mo total project** *before* running anything.

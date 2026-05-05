@@ -13,7 +13,7 @@ Streamlit Cloud / EC2 hosting is deferred to Phase 8. Today the app runs on the 
 | `Home` | CloudWatch alarm states + S3 partition listing + runs ledger | 1 |
 | `🩺 Pipeline Health` | Runs ledger sliced by day/hour, status mix, duration scatter | 1 |
 | `📊 Lending KPIs` | Latest successful parquet read directly from S3 | 1 |
-| `🔍 PII access audit` *(Phase 4)* | CloudTrail data events on KMS + S3 | 4 |
+| `🔍 PII access audit` *(Phase 4)* | CloudTrail S3 data events + KMS management events | 4 |
 | `❄️ Snowflake load health` *(Phase 4)* | Snowflake `INFORMATION_SCHEMA.LOAD_HISTORY` | 4 |
 | `📈 dbt freshness` *(Phase 5)* | dbt `sources.yml` freshness checks | 5 |
 

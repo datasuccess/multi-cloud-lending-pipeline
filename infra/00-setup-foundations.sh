@@ -157,7 +157,9 @@ JSON
 aws s3api put-bucket-policy --bucket "${RAW_BUCKET}" --policy "file://${TMP_POLICY}"
 rm -f "${TMP_POLICY}"
 
-aws s3api put-bucket-tagging --bucket "${RAW_BUCKET}" --tagging "TagSet=${TAGS_JSON}"
+# Wrap TAGS_JSON in a TagSet object — CLI rejects the `TagSet=<json>` shorthand.
+aws s3api put-bucket-tagging --bucket "${RAW_BUCKET}" \
+  --tagging "{\"TagSet\": ${TAGS_JSON}}"
 
 log "       SSE-KMS + bucket-key + PAB + deny-insecure policy applied"
 

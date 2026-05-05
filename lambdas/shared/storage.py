@@ -41,7 +41,15 @@ def _s3_client():
 def write_bytes(uri: str, body: bytes, *, content_type: str | None = None) -> None:
     parsed = parse_uri(uri)
     if parsed.is_s3:
-        kwargs = {"Bucket": parsed.bucket, "Key": parsed.key, "Body": body}
+        # Bucket policy denies PutObject without the SSE-KMS request header,
+        # even though default encryption would apply server-side. Bucket default
+        # encryption resolves the key, so we don't pass SSEKMSKeyId.
+        kwargs = {
+            "Bucket": parsed.bucket,
+            "Key": parsed.key,
+            "Body": body,
+            "ServerSideEncryption": "aws:kms",
+        }
         if content_type:
             kwargs["ContentType"] = content_type
         _s3_client().put_object(**kwargs)
@@ -77,7 +85,12 @@ def append_line(uri: str, line: str) -> None:
         except client.exceptions.NoSuchKey:
             pass
         body = existing + (line + "\n").encode("utf-8")
-        client.put_object(Bucket=parsed.bucket, Key=parsed.key, Body=body)
+        client.put_object(
+            Bucket=parsed.bucket,
+            Key=parsed.key,
+            Body=body,
+            ServerSideEncryption="aws:kms",
+        )
         return
 
     path = Path(parsed.key)

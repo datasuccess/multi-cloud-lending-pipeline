@@ -25,5 +25,5 @@ def validate_table(
     if table.num_rows < min_rows:
         errors.append(f"too few rows: {table.num_rows} < {min_rows}")
     if not table.schema.equals(schema, check_metadata=False):
-        errors.append("schema drift vs declared LOAN_APPLICATIONS_SCHEMA")
+        errors.append("schema drift vs declared schema")
     return errors

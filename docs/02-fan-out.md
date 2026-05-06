@@ -392,3 +392,114 @@ tests/
 - Airflow orchestration / DLQ replay (Phase 8)
 - Streaming `loan_decisions` variant (Phase 11)
 - Cross-account / multi-region (Phase 8 if at all)
+
+---
+
+## 13. Real-world realism rules
+
+These rules make the synthetic data look like prod. dbt source tests in
+Phase 5 expect them — break a rule here and a Phase 5 test fails.
+
+### 13.1 Temporal consistency (the big one)
+
+- `customers.created_at` is **always before** any
+  `loan_applications.applied_at` referencing that customer.
+- Returning customers preserve their original `created_at`; only
+  `updated_at` advances.
+- `bureau_pulls.pulled_at` precedes `decisions.decided_at` by 1–10 minutes.
+- `decisions.decided_at` precedes `drawdowns.disbursed_at` by 0–48 hours.
+- `payments.scheduled_at` is monotonic per drawdown; `payments.paid_at`
+  (if not null) is within ±5 days of `scheduled_at`.
+- `delinquencies.as_of_date` is the partition column; rows are derived
+  from drawdowns + payments at end-of-day.
+
+### 13.2 Customer lifecycle
+
+- **New customer KYC:** 70% `pending`, 28% `verified`, 1% `rejected`,
+  1% `expired`. `pending` ones eventually transition to `verified` (or
+  `rejected`) by the time their first application is decided.
+- **Returning customer KYC:** 96% `verified`, 3% `expired`, 1%
+  `rejected` (these last two re-enter the KYC flow).
+- **Address stability:** 90% of returning customers keep their address.
+  10% have moved (50% same state, 50% different state).
+- **Income drift:** returning customers' `annual_income` jitters by a
+  log-normal multiplier with mean 1.0 and σ ≈ 5%, clamped to ±25%.
+- **Employment stability:** 92% of returning customers keep their
+  `employment_status`; 8% transition (employed ↔ self_employed most
+  common, employed → unemployed for ~1%).
+
+### 13.3 Decision rules (not pure random)
+
+A small rule engine in `loan_decision_generator`. Inputs: bureau score
+band, requested amount, declared income.
+
+| Bureau score | Approve rate | Typical reasons (declined) |
+|---|---|---|
+| < 580 | 5% | `low_score` (95%) |
+| 580–669 | 60% | `low_score`, `high_dti` |
+| 670–739 | 90% | `high_dti`, `income_unverified` |
+| 740+ | 98% | `capacity_exceeded` (rare), `manual_referral` |
+
+Plus a hard rule: `requested_amount / annual_income > 0.5` ⇒ declined
+with `high_dti`, regardless of score.
+
+**APR conditional on score band** (real lending tier shapes):
+- 740+ → 6–10%
+- 670–739 → 10–15%
+- 580–669 → 15–24%
+- declined / referred → null
+
+### 13.4 Drawdown patterns
+
+- Only decisions where `decision='approved'` produce drawdowns.
+- 70% of approved customers draw the **full** approved amount.
+- 30% draw partial: uniform between 30% and 99% of approved amount.
+- `account_last4` is masked (last 4 of a 16-digit number).
+- Time-to-draw: 0–48 hours after `decided_at`, log-normal skewed early.
+
+### 13.5 Payment realism (Markov-ish)
+
+For each active drawdown, generate one scheduled payment per period
+(simplified to one per generator run). Payment status follows a
+state-dependent distribution:
+
+| Prior payment status | This payment: paid_full | paid_partial | missed |
+|---|---|---|---|
+| paid_full / new | 92% | 5% | 3% |
+| paid_partial | 60% | 25% | 15% |
+| missed | 35% | 25% | 40% |
+
+Once you miss, you're more likely to miss again — the cascade is what
+makes Phase 5 dbt's delinquency staging non-trivial.
+
+- `principal_amount` + `interest_amount` ≈ `actual_amount`. Interest is
+  ~APR / 12 of remaining principal; principal is the rest.
+- `paid_at` is null when `payment_status ∈ {scheduled, missed, waived}`.
+
+### 13.6 Delinquencies are derived, not invented
+
+`delinquency_generator` reads `drawdowns` + `payments`, computes the
+cumulative scheduled-vs-actual gap per drawdown as of the run date, and
+emits one snapshot row per drawdown where `dpd_days > 0`. The DPD
+bucket is derived:
+
+```
+1–30   → "1-30"
+31–60  → "31-60"
+61–90  → "61-90"
+> 90   → "90+"
+```
+
+No randomness in this generator — it's a deterministic function of
+upstream data. The only randomness is the choice of
+`as_of_date = ingest_date`.
+
+### 13.7 Where these rules are tested
+
+- Per-generator unit tests assert distributions match within tolerance
+  (e.g., approve rate by score band, payment-status transition matrix).
+- `tests/test_fan_out_e2e.py` runs a small cohort end-to-end and asserts
+  every FK resolves, no temporal violations, derived delinquency rows
+  match independently-computed expectations.
+- Phase 5 dbt source tests are the production-style enforcement layer
+  (uniqueness, non-null, referential integrity, accepted-values).

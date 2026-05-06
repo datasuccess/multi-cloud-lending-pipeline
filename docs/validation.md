@@ -26,6 +26,11 @@ The choice is per-source, not per-pipeline: a single project can mix
 fail-loud (batch parquet) with quarantine (streaming events) — Phase 2
 will. Phase 1 is fail-loud only.
 
+> Escalation policy is *also* a debugging-time stance: see
+> [`operations.md`](operations.md) for why "fix forward" is the production
+> default once a partition has been rejected, and why teardown is rarely
+> the right remediation.
+
 ### What "fail loud" actually buys you
 
 Three guarantees, none of them trivial:

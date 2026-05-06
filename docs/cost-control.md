@@ -158,7 +158,9 @@ configured budget, the alarm fires.
   at the end of the month.
 - ❌ **Forgotten test resources.** `infra/99-teardown.sh` exists so any
   resource Phase 1 created can be deleted in one command. If you can't
-  tear down, you can't experiment cheaply.
+  tear down, you can't experiment cheaply. (For why this script gets
+  *deleted* from the repo at Phase 4, see [`operations.md`](operations.md):
+  fix-forward is the production default, not teardown.)
 
 ## 12. Where the cost controls live in code
 

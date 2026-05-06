@@ -3,7 +3,7 @@
 # Phase 1 — toggle the pipeline between TEST and PROD shape.
 #
 # `test` mode:
-#   - hourly EventBridge schedule (cron(0 * * * ? *))
+#   - 6-hourly EventBridge schedule (cron(0 */6 * * ? *) — fires 00, 06, 12, 18 UTC)
 #   - anomaly engine on (skip 3% / undershoot 10% / silent_fail 5% / slow 5%)
 #   - MIN_ROWS=1 so undershoot writes pass validation and surface as the
 #     low-volume alarm rather than the errors alarm
@@ -31,9 +31,9 @@ source "${HERE}/_env.sh"
 MODE="${1:-}"
 case "${MODE}" in
   test)
-    SCHEDULE="cron(0 * * * ? *)"   # every hour on the hour
+    SCHEDULE="cron(0 */6 * * ? *)" # every 6h: 00:00, 06:00, 12:00, 18:00 UTC
     LOG_LEVEL="INFO"
-    ROWS_PER_RUN=2000              # smaller so hourly runs stay cheap
+    ROWS_PER_RUN=2000              # smaller so test runs stay cheap
     MIN_ROWS_VAL=1
     LOW_VOLUME_THRESHOLD=400
     ANOMALY_VARS="MODE=test,ANOMALY_SKIP_PROB=0.03,ANOMALY_UNDERSHOOT_PROB=0.10,ANOMALY_SILENT_FAIL_PROB=0.05,ANOMALY_SLOW_PROB=0.05"
@@ -82,14 +82,15 @@ aws events put-rule \
 log "EventBridge schedule set to ${SCHEDULE}"
 
 # ---------------------------------------------------------------------------
-# 3. Low-volume alarm threshold (and freshness period when hourly).
+# 3. Low-volume + freshness alarm thresholds (mode-dependent).
 # ---------------------------------------------------------------------------
-# Test mode evaluates over a 1-hour window because we run hourly; prod uses
-# the 24-hour window so a single low-row run doesn't page on a slow day.
+# Test mode evaluates over a 6-hour window because we run every 6 hours; prod
+# uses the 24-hour window so a single low-row run doesn't page on a slow day.
+# Freshness window matches the schedule: 2 missed runs in a row = breach.
 if [[ "${MODE}" == "test" ]]; then
-  LV_PERIOD=3600
-  FRESHNESS_PERIOD=3600
-  FRESHNESS_EVAL=2          # 2h missing = breach
+  LV_PERIOD=21600           # 6h, matches the schedule
+  FRESHNESS_PERIOD=21600    # 6h
+  FRESHNESS_EVAL=2          # 12h missing (two consecutive runs) = breach
 else
   LV_PERIOD=86400
   FRESHNESS_PERIOD=3600

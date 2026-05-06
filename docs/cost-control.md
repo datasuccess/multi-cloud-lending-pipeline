@@ -59,12 +59,12 @@ saving — every invocation forever benefits.
 
 `infra/06-set-mode.sh test` sets:
 
-- Schedule: hourly (vs daily in prod)
+- Schedule: every 6h (00, 06, 12, 18 UTC) — vs daily in prod
 - `ROWS_PER_RUN=2000` (vs 12 000 in prod)
 - Anomaly engine: on (with non-zero probabilities)
 
-That's 24 runs/day × 2k rows ≈ ~$0.05/month even running constantly. Prod
-mode (1 run/day × 12k rows) drops to ~$0.02/month. The whole Lambda
+That's 4 runs/day × 2k rows ≈ ~$0.01/month even running constantly. Prod
+mode (1 run/day × 12k rows) is similar order of magnitude. The whole Lambda
 budget is essentially zero — which is the point. We can leave test mode on
 for weeks while learning, with no cost discipline required.
 

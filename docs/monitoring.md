@@ -62,7 +62,7 @@ Tools we **don't** use (and why):
 
 SLOs are **published to consumers**, not internal. When dbt staging in Phase 4 reads from S3, its source freshness check uses the same 03:15 UTC target.
 
-> **Test-mode thresholds.** When the pipeline is flipped to `MODE=test` (hourly + anomalies — see [`anomaly-injection.md`](anomaly-injection.md)) the alarm thresholds shift: low-volume = 400 rows, freshness = 2-hour missing window. The SLOs in the table above are the *prod* targets; test-mode thresholds exist purely to make the alarms exercisable on a short feedback loop.
+> **Test-mode thresholds.** When the pipeline is flipped to `MODE=test` (every 6h + anomalies — see [`anomaly-injection.md`](anomaly-injection.md)) the alarm thresholds shift: low-volume = 400 rows over a 6-hour period, freshness = 12-hour missing window (two consecutive 6-hour periods). The SLOs in the table above are the *prod* targets; test-mode thresholds exist purely to make the alarms exercisable on a short feedback loop.
 
 ## 5. The three patterns every prod data job ships with
 

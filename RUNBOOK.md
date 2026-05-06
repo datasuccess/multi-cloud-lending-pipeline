@@ -60,11 +60,11 @@ aws cloudwatch describe-alarms --alarm-names lending-loan-app-errors \
 
 ```bash
 ./infra/05-bootstrap-secrets.sh         # creates lending/dev/streamlit-config
-./infra/06-set-mode.sh test             # hourly cron + anomaly engine on
+./infra/06-set-mode.sh test             # 6-hourly cron + anomaly engine on
                                         # (low-volume threshold drops to 400)
 ```
 
-In test mode the pipeline runs every hour and rolls a die:
+In test mode the pipeline runs every 6 hours (00, 06, 12, 18 UTC) and rolls a die:
 - 3% SKIP → exercises the freshness alarm
 - 10% UNDERSHOOT → exercises the low-volume alarm
 - 5% SILENT_FAIL → exercises the errors alarm

@@ -215,7 +215,7 @@ A single Lambda env var `MODE` (set by `infra/06-set-mode.sh`) controls both the
 | `MODE` | Cron                  | Cadence | Rows/run | `MIN_ROWS` | Anomaly engine | Low-volume threshold |
 |--------|-----------------------|---------|----------|------------|----------------|----------------------|
 | `prod` | `cron(0 3 * * ? *)`   | daily 03:00 UTC | 12,000 | 10,000 | off — deterministic | 10,000 |
-| `test` | `cron(0 * * * ? *)`   | every hour | 2,000 | 1 | on — see [`anomaly-injection.md`](anomaly-injection.md) | 400 |
+| `test` | `cron(0 */6 * * ? *)` | every 6h (00, 06, 12, 18 UTC) | 2,000 | 1 | on — see [`anomaly-injection.md`](anomaly-injection.md) | 400 |
 
 Each invocation:
 1. Generates rows with `applied_at` distributed across the previous 24 hours, business-hours skewed (peak 10:00–18:00 local US time).

@@ -81,7 +81,7 @@ didn't run at all**, or it ran many times with subtly low volumes.
 | Alarm | Watches | Default (prod) | Default (test) |
 |---|---|---|---|
 | `lending-loan-app-errors` | AWS/Lambda `Errors` (any uncaught exception) | ≥ 1 in 5 min | same |
-| `lending-loan-app-freshness` | custom `RowsWritten` metric | no data for 26 h | 90 min |
+| `lending-loan-app-freshness` | custom `heartbeat` metric | no data for 26 h | no data for 12 h (two missed 6h runs) |
 | `lending-loan-app-low-volume` | `RowsWritten` aggregated | < 10 000 / day | < 400 / run |
 
 Operational gates catch:

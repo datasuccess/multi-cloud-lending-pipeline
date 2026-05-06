@@ -137,10 +137,37 @@ the key gone too.
   rejects writes without `aws:kms` SSE. Lambda and S3 default-encryption
   handle this automatically; client code never has to set the header.
 
-## Phase 2 lift to Terraform
+## Phase 2 — fan-out generators
+
+Phase 2 is **additive**: existing Phase 1 scripts and resources stay as-is.
+Six new Lambdas (customers, credit_bureau_pulls, loan_decisions,
+loan_drawdowns, payments, delinquencies) deploy through parallel
+`*-fanout.sh` scripts that share the Phase 1 layer + SNS topics.
+
+| # | Script | What it does |
+|---|---|---|
+| 1 | `infra/01-setup-iam-fanout.sh` | Shared `lending-fanout-generator-role` + inline policy (S3 read/write across all `raw/*`, KMS, DLQ SendMessage). |
+| 2 | `infra/02-setup-monitoring-fanout.sh` | 6 SQS DLQs + 24 alarms (errors / freshness / low-volume / dlq-depth × 6) + 12 dashboard widgets. |
+| 3 | `infra/lambda/package-fanout.sh` | Six per-source zips under `build/`. |
+| 4 | `infra/lambda/02-deploy-fanout.sh` | Create-or-update six Lambdas, wire DLQs, EventBridge rules on prod offsets (§5). |
+| 5 | `infra/06-set-mode-fanout.sh test` | Flip all six to 6-hourly + anomaly engine + lowered thresholds. |
+
+Run order after Phase 1 is healthy:
+
+```bash
+./infra/01-setup-iam-fanout.sh
+./infra/02-setup-monitoring-fanout.sh
+./infra/lambda/package-fanout.sh
+./infra/lambda/02-deploy-fanout.sh
+./infra/06-set-mode-fanout.sh test    # exercise the anomaly engine; flip back with `prod`
+```
+
+Total Phase 2 monthly: **< $1** (six daily Lambda runs + SQS DLQ baseline).
+
+## Lift to Terraform (later)
 
 Every resource has an HCL equivalent shown inline in
-[`docs/01-aws-foundations.md`](../docs/01-aws-foundations.md) §3.2. Phase 2's
-job is to import these resources into a `terraform` module under
-`infra/terraform/02-foundations/` and re-apply with `var.environment="dev"`.
+[`docs/01-aws-foundations.md`](../docs/01-aws-foundations.md) §3.2. A future
+phase imports these resources into a `terraform` module under
+`infra/terraform/02-foundations/` and re-applies with `var.environment="dev"`.
 No behavioural change.

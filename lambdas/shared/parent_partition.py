@@ -116,6 +116,45 @@ def _ingest_date_from_key(key: str) -> date | None:
     return None
 
 
+def all_success_partitions_through(
+    base_uri: str, source: str, *, through: date
+) -> list[str]:
+    """All `_SUCCESS`'d partition URIs for `source` with `ingest_date <= through`.
+
+    Used by snapshot-style generators (delinquencies) that aggregate across
+    the full history of a fan-out source. Returns sorted ascending by date.
+    """
+    parsed = parse_uri(base_uri)
+    if parsed.is_s3:
+        prefix = f"{parsed.key.rstrip('/')}/raw/{source}/"
+        paginator = _s3_client().get_paginator("list_objects_v2")
+        out: list[tuple[date, str]] = []
+        for page in paginator.paginate(Bucket=parsed.bucket, Prefix=prefix):
+            for obj in page.get("Contents") or []:
+                key = obj["Key"]
+                if not key.endswith("/_SUCCESS"):
+                    continue
+                ingest_date = _ingest_date_from_key(key)
+                if ingest_date is None or ingest_date > through:
+                    continue
+                partition_key = key[: -len("/_SUCCESS")]
+                out.append((ingest_date, f"s3://{parsed.bucket}/{partition_key}"))
+        out.sort(key=lambda t: t[0])
+        return [uri for _, uri in out]
+
+    root = Path(parsed.key) / "raw" / source
+    if not root.exists():
+        return []
+    out_local: list[tuple[date, str]] = []
+    for marker in root.rglob("_SUCCESS"):
+        ingest_date = _ingest_date_from_key(str(marker))
+        if ingest_date is None or ingest_date > through:
+            continue
+        out_local.append((ingest_date, str(marker.parent)))
+    out_local.sort(key=lambda t: t[0])
+    return [uri for _, uri in out_local]
+
+
 def list_parquet_uris(partition_uri: str) -> list[str]:
     """All `.parquet` object URIs under `partition_uri` (excluding manifests)."""
     parsed = parse_uri(partition_uri)

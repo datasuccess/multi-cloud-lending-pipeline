@@ -137,9 +137,10 @@ retention period — explicit deletion only happens at year 7.
 | Phase | Teardown stance |
 |---|---|
 | **Phase 1** | `99-teardown.sh` is fine. Synthetic data, learning project, every cost gate works against the script not for it. |
-| **Phase 2** | Same. Streaming consumer adds Kinesis / MSK; data is still synthetic. |
-| **Phase 4** | `99-teardown.sh` gets **deleted from the repo.** The first phase that touches data with realistic shape (loan-application records, even synthetic) is the cutover. Replaced with a per-resource decommissioning runbook. |
+| **Phase 2 – 3** | Same. Phase 2 fans out to the remaining six batch generators; Phase 3 introduces Iceberg compaction. Data is still synthetic, all S3-resident; teardown stays cheap. |
+| **Phase 4** | `99-teardown.sh` gets **deleted from the repo.** First phase that lands data in real warehouses (Redshift Serverless, eventually Snowflake) — the cutover to a per-resource decommissioning runbook. |
 | **Phase 4+** | All new buckets get versioning + lifecycle (already), plus `prevent_destroy` in IaC, plus MFA Delete on the prod bucket. KMS keys disable-only. |
+| **Phase 11** | Streaming (Kinesis + Firehose) joins the batch fan-out — adds quarantine-policy validation, but teardown stance is unchanged: it's the *data* that drives the cutover, not the transport. |
 
 The `99-teardown.sh` disclaimer that should live at the top of the script
 once Phase 4 is in flight:

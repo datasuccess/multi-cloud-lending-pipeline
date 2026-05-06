@@ -20,11 +20,11 @@ options; we pick one and the choice has architectural consequences.
 |---|---|---|---|
 | **Fail loud** | Whole partition is rejected. No `_SUCCESS`. Alarm fires. Ledger row marked `status=failure`. Bad parquet may exist as an orphan but no consumer will read it. | Batch jobs where the partition is the unit of consumption. Replays are cheap. | **Our default.** The lending pipeline produces `loan_applications` partitions consumed atomically by Phase 4 loaders and Phase 5 dbt models. Splitting a partition makes no business sense. |
 | **Silent corruption** | The bad data flows through unchecked. Eventually a consumer notices (or doesn't). | Never. This is the **anti-pattern** every other policy is designed to prevent. | We refuse it. The four gates exist exactly so this cannot happen — `_SUCCESS` is the only "go" signal and is gated on every check. |
-| **Quarantine / dead-letter** | Bad rows are routed to a side prefix (`_quarantine/<source>/`), the rest of the partition flows. Quarantined rows are alerted on but don't block the path. | Streaming pipelines where a single bad event shouldn't stop the consumer. Per-row sources where there's no natural partition unit. | **Not in Phase 1.** The generator is the system of record — there's no upstream to quarantine *from*. Phase 2's streaming path will use this for the per-event `loan_decision` stream, where one bad event must not stall the consumer for everyone else. |
+| **Quarantine / dead-letter** | Bad rows are routed to a side prefix (`_quarantine/<source>/`), the rest of the partition flows. Quarantined rows are alerted on but don't block the path. | Streaming pipelines where a single bad event shouldn't stop the consumer. Per-row sources where there's no natural partition unit. | **Not in Phase 1 or 2 (still batch).** Adopted in **Phase 11** when streaming `loan_decisions` lands on Kinesis — there, one bad event must not stall the consumer for everyone else. |
 
 The choice is per-source, not per-pipeline: a single project can mix
-fail-loud (batch parquet) with quarantine (streaming events) — Phase 2
-will. Phase 1 is fail-loud only.
+fail-loud (batch parquet) with quarantine (streaming events) — Phase 11
+will. Phase 1 + Phase 2 are fail-loud only (all batch).
 
 > Escalation policy is *also* a debugging-time stance: see
 > [`operations.md`](operations.md) for why "fix forward" is the production
@@ -48,7 +48,7 @@ The cost: **partition-granular outages**. If gate A rejects one bad row, the
 whole 12 000-row partition is rejected (we don't quarantine the row, we
 reject the run). For batch loan applications that's correct — partial data
 on a financial date would be worse than no data. For per-event streams it
-would be wrong, hence Phase 2 picks differently.
+would be wrong, hence Phase 11 picks differently.
 
 ## The four gates
 

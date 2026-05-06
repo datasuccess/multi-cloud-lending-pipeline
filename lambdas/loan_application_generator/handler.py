@@ -48,6 +48,10 @@ from lambdas.shared.observability import (
     get_metrics,
     record_run_metrics,
 )
+from lambdas.shared.parent_partition import (
+    latest_success_partition,
+    read_parent_columns,
+)
 from lambdas.shared.parquet_writer import (
     LOAN_APPLICATIONS_SCHEMA,
     read_parquet,
@@ -68,6 +72,20 @@ DEFAULT_ROWS = 12_000
 # errors alarm. Prod keeps the strict 10k floor.
 MIN_ROWS = int(os.environ.get("MIN_ROWS", 10_000))
 
+CUSTOMERS_SOURCE = "customers"
+PARENT_COLUMNS = [
+    "customer_id",
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "date_of_birth",
+    "address_line1",
+    "city",
+    "state",
+    "zip",
+]
+
 logger = get_logger("loan-app-generator")
 metrics = get_metrics("loan-app-generator")
 
@@ -83,6 +101,22 @@ class RunResult:
     duration_ms: int
     validation_passed: bool
     validation_errors: list[str]
+    parent_partition_uri: str | None = None
+
+
+def _load_customer_parents(base_uri: str) -> tuple[list[dict], str | None]:
+    """Find the latest customers partition and read FK + identity columns.
+
+    Returns ([], None) when no `_SUCCESS`'d customers partition exists yet —
+    the generator falls back to fully Faker-generated rows in that case.
+    """
+    parent_uri = latest_success_partition(base_uri, CUSTOMERS_SOURCE)
+    if parent_uri is None:
+        return [], None
+    cols = read_parent_columns(parent_uri, PARENT_COLUMNS)
+    n = len(cols["customer_id"])
+    rows = [{c: cols[c][i] for c in PARENT_COLUMNS} for i in range(n)]
+    return rows, parent_uri
 
 
 def _parse_ingest_date(raw: str | None) -> date:
@@ -131,7 +165,22 @@ def run(
     if anomaly is Anomaly.UNDERSHOOT:
         rows_n = undershoot_rows()
 
-    rows = make_rows(rows_n, ingest_date, seed=seed, ingest_at=started_at)
+    parent_rows, parent_partition_uri = _load_customer_parents(base_uri)
+    if parent_partition_uri is None:
+        logger.warning(
+            "loan_app_generator.no_customer_parent",
+            extra={"note": "no customers partition; falling back to faker FKs"},
+        )
+    else:
+        logger.append_keys(parent_partition=parent_partition_uri)
+
+    rows = make_rows(
+        rows_n,
+        ingest_date,
+        seed=seed,
+        ingest_at=started_at,
+        parent_customer_rows=parent_rows or None,
+    )
     table = rows_to_table(rows, LOAN_APPLICATIONS_SCHEMA)
 
     partition_uri = _partition_uri(base_uri, ingest_date)
@@ -204,6 +253,7 @@ def run(
         duration_ms=duration_ms,
         validation_passed=validation_passed,
         validation_errors=errors,
+        parent_partition_uri=parent_partition_uri,
     )
 
     if not validation_passed:
@@ -278,6 +328,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "bytes": result.bytes,
             "duration_ms": result.duration_ms,
             "parquet_uri": result.parquet_uri,
+            "parent_partition_uri": result.parent_partition_uri,
         },
     )
 
@@ -290,4 +341,5 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "rows": result.rows,
         "bytes": result.bytes,
         "duration_ms": result.duration_ms,
+        "parent_partition_uri": result.parent_partition_uri,
     }

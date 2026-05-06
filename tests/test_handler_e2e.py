@@ -159,6 +159,69 @@ def test_anomaly_silent_fail_blocks_success(tmp_path):
     assert "_SUCCESS" not in files
 
 
+def test_handler_picks_customer_ids_from_parent_partition(tmp_path, monkeypatch):
+    """When a customers partition exists, loan_apps reuse customer_ids from it.
+
+    Lands a customers partition first (via the customer_generator handler),
+    then runs loan_apps and verifies every customer_id in the loan-app
+    partition is present in the customers partition.
+    """
+    from lambdas.customer_generator import handler as ch
+    from lambdas.shared.parent_partition import read_parent_columns
+
+    monkeypatch.setattr(h, "MIN_ROWS", 1)
+    monkeypatch.setattr(ch, "MIN_ROWS", 1)
+    base = tmp_path / "lake"
+
+    cust_result = ch.run(
+        base_uri=str(base),
+        rows_n=200,
+        seed=1,
+        ingest_date=h.date.fromisoformat("2026-05-04"),
+        trigger="test",
+    )
+    assert cust_result.validation_passed is True
+
+    result = h.run(
+        base_uri=str(base),
+        rows_n=300,
+        seed=2,
+        ingest_date=h.date.fromisoformat("2026-05-04"),
+        trigger="test",
+    )
+    assert result.validation_passed is True
+    assert result.parent_partition_uri is not None
+    assert result.parent_partition_uri.endswith("customers/ingest_date=2026-05-04")
+
+    cust_partition = base / "raw" / "customers" / "ingest_date=2026-05-04"
+    cust_ids = set(read_parent_columns(str(cust_partition), ["customer_id"])["customer_id"])
+
+    app_table = read_parquet(result.parquet_uri)
+    app_customer_ids = set(app_table.column("customer_id").to_pylist())
+    assert app_customer_ids.issubset(cust_ids)
+    # Sample with replacement (300 apps from 200 customers) → some reuse expected.
+    assert len(app_customer_ids) <= 200
+
+
+def test_handler_falls_back_to_faker_when_no_parent(tmp_path, monkeypatch):
+    """No customers partition → all customer_ids are unique uuid4s, run still succeeds."""
+    monkeypatch.setattr(h, "MIN_ROWS", 1)
+    base = tmp_path / "lake"
+
+    result = h.run(
+        base_uri=str(base),
+        rows_n=200,
+        seed=42,
+        ingest_date=h.date.fromisoformat("2026-05-04"),
+        trigger="test",
+    )
+    assert result.validation_passed is True
+    assert result.parent_partition_uri is None
+    table = read_parquet(result.parquet_uri)
+    ids = table.column("customer_id").to_pylist()
+    assert len(set(ids)) == len(ids)  # all distinct
+
+
 def test_anomaly_slow_sleeps_before_validation(tmp_path, monkeypatch):
     """SLOW must call time.sleep(SLOW_SLEEP_SECONDS) — patch sleep so the test is fast."""
     base = tmp_path / "lake"

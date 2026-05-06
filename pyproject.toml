@@ -6,14 +6,36 @@ requires-python = ">=3.11"
 readme = "README.md"
 
 # Per-phase dependencies are added as the phases land.
-# Phase 0 has no runtime deps.
-dependencies = []
+# Phase 1: Lambda generator stack (pyarrow + Faker + Powertools).
+#
+# pyarrow upper bound is intentionally open: Py3.13 venvs need >=18 (no
+# py3.13 wheels exist for 16.x). The Lambda *layer* build pins
+# PYARROW_VER=16.1.0 in infra/lambda/build-layer.sh, so the deployed
+# runtime stays on the version the schema was developed against —
+# independent of whatever the local venv resolves to.
+dependencies = [
+    "pyarrow>=16",
+    "faker>=25,<26",
+    "aws-lambda-powertools>=2.30",
+    "boto3>=1.28",
+]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.5",
     "pre-commit>=3.7",
+    "pytest>=8",
 ]
+# Local-only stack for the monitoring app — never bundled into the Lambda zip.
+streamlit = [
+    "streamlit>=1.32",
+    "pandas>=2.1",
+    "plotly>=5.20",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"
@@ -25,3 +47,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Project name (`multi-cloud-lending-pipeline`) doesn't match any top-level
+# directory, so Hatch can't auto-discover what to ship. List the importable
+# packages explicitly.
+[tool.hatch.build.targets.wheel]
+packages = ["lambdas", "streamlit_app"]

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from streamlit_app.lib.config import load_config
-from streamlit_app.lib.data import alarm_states, list_partitions, list_runs
+from lib.config import load_config
+from lib.data import alarm_states, list_partitions, list_runs
 
 st.set_page_config(page_title="Lending pipeline", layout="wide")
 
@@ -38,7 +38,7 @@ if alarms.empty:
     st.info("No alarms found yet. Run `infra/02-setup-monitoring.sh`.")
 else:
     cols = st.columns(len(alarms))
-    for col, (_, row) in zip(cols, alarms.iterrows(), strict=True):
+    for col, (_, row) in zip(cols, alarms.iterrows()):
         emoji = {"OK": "🟢", "ALARM": "🔴", "INSUFFICIENT_DATA": "⚪"}.get(
             row["state"], "⚪"
         )

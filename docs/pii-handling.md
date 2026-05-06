@@ -4,6 +4,12 @@ This is a cross-phase document. Every phase that touches storage, IAM, dbt, or w
 
 > **Operating principle.** Collect PII because the business needs it (KYC, fraud, support). **Encrypt at rest. Mask by default. Unmask only via audited, time-bounded, ticket-driven access. Log every read.**
 
+> **Companion doc:** [`kms-and-pii-access.md`](kms-and-pii-access.md) covers
+> the **AWS layer** (KMS envelope encryption, the encrypt-only IAM pattern,
+> the three-role model, CloudTrail audit). This doc covers the **warehouse
+> layer** (column-level masking, unmasking workflow, GDPR rights). A user
+> only sees raw PII when **both** layers grant it.
+
 ---
 
 ## 1. Classification (the taxonomy)

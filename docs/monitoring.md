@@ -2,6 +2,9 @@
 
 Cross-phase doc. Every phase that adds a new pipeline component points back here.
 
+> Companion: [`validation.md`](validation.md) — the four-gate validation
+> taxonomy that the alarms in §5–§6 escalate on.
+
 > **Operating principle.** Monitoring exists to answer *5 questions, every day, without anyone logging in*. If a question can only be answered by SSHing into a box or running a one-off query, it isn't monitored.
 
 ---
@@ -103,6 +106,27 @@ Manifest schema:
 
 A single S3 path that *every* job appends to. The single source of truth for "did X run on day Y."
 
+> **Why "ledger"?** The word comes from accounting — a ledger is a permanent
+> record of transactions; you don't edit historical entries, you append new
+> ones. That property is exactly what we want here:
+>
+> - **Append-only** — the same discipline as a financial ledger. You don't
+>   rewrite a row, you write a correcting entry. (Phase 1 reads + appends
+>   because we cram all per-day runs into one file; Phase 2 splits to
+>   one-file-per-run, which is the *true* ledger pattern with no
+>   read-modify-write.)
+> - **System of record** — the answer to "did run X happen?" comes from the
+>   ledger, not from CloudWatch (15-month retention) or from inferring from
+>   S3 partition state. Manifests describe individual *files*; the ledger
+>   describes *invocations*, including failures where no file exists.
+> - **Replayable** — given the ledger, you can reconstruct every state the
+>   pipeline was in. That's the property that makes the Streamlit "Pipeline
+>   Health" page possible without any database.
+>
+> The conceptual ancestor is a database **transaction log**: every change
+> appended, current state derived from replay. Same pattern, simpler
+> implementation (S3 + JSONL).
+
 ```
 s3://lending-raw-<acct>/_pipeline_runs/
 └── source=loan_applications/
@@ -190,6 +214,7 @@ Two cheap patterns that catch failures the metrics miss:
 - ❌ **No-runbook alarms.** Every alarm has a runbook line in `lambdas/<source>/README.md` saying "if this fires, do X." If you can't write the runbook, the alarm shouldn't exist.
 - ❌ **Threshold-only alarms on long-trending metrics.** Use anomaly detection (Phase 8+) for things like volumes that drift seasonally.
 - ❌ **Monitoring built after the fact.** Ship monitoring with the feature in the same PR. Phase 1 includes monitoring; Phase 1 doesn't ship without it.
+- ❌ **Silent corruption** — readers consuming a broken partition because nothing told them it was broken. We avoid this by gating *every* downstream read on `_SUCCESS`, and writing `_SUCCESS` only after all four validation gates are green. See the policy comparison (fail-loud vs silent-corruption vs quarantine) in [`validation.md`](validation.md#escalation-policy-what-we-do-when-a-gate-fails).
 
 ## 10. Per-phase additions (cumulative)
 

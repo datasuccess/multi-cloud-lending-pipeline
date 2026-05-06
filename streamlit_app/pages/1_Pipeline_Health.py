@@ -10,8 +10,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from streamlit_app.lib.config import load_config
-from streamlit_app.lib.data import list_runs
+from lib.config import load_config
+from lib.data import list_runs
 
 st.set_page_config(page_title="Pipeline health", layout="wide")
 st.title("🩺 Pipeline health")

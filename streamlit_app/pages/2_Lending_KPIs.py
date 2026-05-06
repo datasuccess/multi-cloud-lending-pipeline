@@ -7,9 +7,9 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from streamlit_app.lib.config import load_config
-from streamlit_app.lib.data import latest_parquet
-from streamlit_app.lib.kpis import (
+from lib.config import load_config
+from lib.data import latest_parquet
+from lib.kpis import (
     amount_distribution,
     channel_mix,
     dti_distribution,

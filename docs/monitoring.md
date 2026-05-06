@@ -64,6 +64,27 @@ SLOs are **published to consumers**, not internal. When dbt staging in Phase 4 r
 
 > **Test-mode thresholds.** When the pipeline is flipped to `MODE=test` (every 6h + anomalies — see [`anomaly-injection.md`](anomaly-injection.md)) the alarm thresholds shift: low-volume = 400 rows over a 6-hour period, freshness = 12-hour missing window (two consecutive 6-hour periods). The SLOs in the table above are the *prod* targets; test-mode thresholds exist purely to make the alarms exercisable on a short feedback loop.
 
+### 4.1 Phase 2 — per-source SLOs
+
+Every fan-out source inherits the same SLO shape, with floors per
+`docs/02-fan-out.md` §7. `infra/06-set-mode-fanout.sh` re-tunes
+low-volume + freshness alarms when flipping `test ↔ prod`.
+
+| Source | Daily-by (UTC) | Min rows (prod) | Min rows (test) |
+|---|---|---|---|
+| `customers` | 02:55 | 10 000 | 400 |
+| `loan_applications` | 03:05 | 10 000 | 400 |
+| `credit_bureau_pulls` | 03:15 | 10 000 | 400 |
+| `loan_decisions` | 03:20 | 10 000 | 400 |
+| `loan_drawdowns` | 03:35 | 6 000 | 200 |
+| `payments` | 03:50 | 20 000 | 200 |
+| `delinquencies` | 04:05 | 1 000 | 50 |
+
+A breach on any single source triggers a P1 (errors / freshness) or P2
+(low-volume / dlq-depth). The whole chain doesn't fail together — each
+generator's `_SUCCESS` is per-partition, so a downstream failure on day N
+doesn't roll back the upstream `_SUCCESS` for the same day.
+
 ## 5. The three patterns every prod data job ships with
 
 ### 5.1 `_SUCCESS` marker + manifest sidecar

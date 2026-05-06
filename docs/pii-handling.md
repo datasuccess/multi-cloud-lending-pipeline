@@ -24,6 +24,29 @@ This is a cross-phase document. Every phase that touches storage, IAM, dbt, or w
 
 The taxonomy is encoded in `dbt/macros/pii/pii_classes.sql` (Phase 4). Each model declares which columns belong to which tier; masking macros consume the tag.
 
+### 1.1 Per-source PII tier (Phase 2)
+
+The seven sources sit at different tiers — `customers` is the new
+highest-tier source because it consolidates direct identifiers that were
+previously scattered across applications.
+
+| Source | Tier | Direct identifiers present |
+|---|---|---|
+| `customers` | **High (DI)** | first_name, last_name, email, dob, phone, address_line1 |
+| `loan_applications` | Medium (QI + DI subset) | requested_amount, channel, applied_at + denormalized identity from `customers` |
+| `credit_bureau_pulls` | Low | bureau_score, hard_inquiry — no identity beyond FK |
+| `loan_decisions` | Low | decision, APR, approved_amount — pricing only |
+| `loan_drawdowns` | Medium | drawn_amount, masked `account_last4` |
+| `payments` | Low | amounts + status — no identity |
+| `delinquencies` | Low | dpd_bucket, outstanding_principal — derived only |
+
+The KMS encrypt-only IAM model in §2 applies *uniformly* across all
+seven prefixes — the bucket policy doesn't distinguish tiers, the
+warehouse layer does. Masking policies in §3 will fan out to each
+staging model in Phase 5; tier-Low sources still get masked by default
+(principle of least privilege) even though the columns are mostly
+financial-not-identifying.
+
 ## 2. Storage — what's where
 
 ```

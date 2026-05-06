@@ -61,6 +61,14 @@ would be wrong, hence Phase 11 picks differently.
 | Decimal precision | `decimal(12,2)` | `1234567890123.45` exceeds 10 digits before the decimal |
 | Date/timestamp shape | `date32` / `timestamp[us, UTC]` | string `"yesterday"` instead of an ISO timestamp |
 
+**Phase 2 — per-source schemas.** Gate A is now enforced separately by each
+of the seven schemas (`customers`, `loan_applications`,
+`credit_bureau_pulls`, `loan_decisions`, `loan_drawdowns`, `payments`,
+`delinquencies`). Each schema lives in its own `schema.py` and is
+shape-checked in the source's `tests/test_*_generator.py::test_schema_roundtrips`.
+The schema-hash mechanism (Gate B) is independent per source, so a schema
+change in one fan-out source can't silently desync another.
+
 Failures at this gate raise inside `pa.Table.from_pylist(...)` and the run
 aborts **before any S3 write**.
 
@@ -88,6 +96,23 @@ didn't run at all**, or it ran many times with subtly low volumes.
 | `lending-loan-app-errors` | AWS/Lambda `Errors` (any uncaught exception) | ≥ 1 in 5 min | same |
 | `lending-loan-app-freshness` | custom `heartbeat` metric | no data for 26 h | no data for 12 h (two missed 6h runs) |
 | `lending-loan-app-low-volume` | `RowsWritten` aggregated | < 10 000 / day | < 400 / run |
+
+**Phase 2 — same three alarms × six new sources = 18 alarms**, plus 6
+DLQ-depth alarms. Per-source thresholds in `infra/_env.sh`
+(`PHASE2_PROD_MIN_ROWS`, `PHASE2_TEST_MIN_ROWS`):
+
+| Source | prod low-volume floor | test low-volume floor |
+|---|---|---|
+| `customers` | 10 000 | 400 |
+| `credit_bureau_pulls` | 10 000 | 400 |
+| `loan_decisions` | 10 000 | 400 |
+| `loan_drawdowns` | 6 000 | 200 |
+| `payments` | 20 000 | 200 |
+| `delinquencies` | 1 000 | 50 |
+
+The DLQ-depth alarm is P2 (email-only): anything in
+`lending-<source>-dlq` is a Lambda whose async retries failed twice in a
+row. Triage with `aws sqs receive-message --queue-url …` per RUNBOOK §4.
 
 Operational gates catch:
 - Schedule failure (EventBridge stopped, IAM revoked, account quota tripped).

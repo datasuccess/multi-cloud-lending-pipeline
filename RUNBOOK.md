@@ -107,6 +107,97 @@ KMS key isn't auto-deleted (AWS forces a 7-30 day pending window). The script pr
 
 ---
 
-## Phase 2+ — landed when the phases land
+## Phase 2 — fan-out generators
+
+Six new sources land on the same Lambda + S3 + EventBridge pattern Phase 1
+established. Wiring is **additive**: existing Phase 1 resources stay
+untouched.
+
+```
+   customers ─┐
+              ├── loan_applications ── credit_bureau_pulls
+              │                    ├── loan_decisions ── loan_drawdowns
+              │                    │                  ├── payments
+              │                    │                  └── delinquencies
+              └────────────────────┘
+```
+
+### 1. Provision (in order, after Phase 1 is healthy)
+
+```bash
+./infra/01-setup-iam-fanout.sh           # shared lending-fanout-generator-role
+./infra/02-setup-monitoring-fanout.sh    # 6 DLQs + 24 alarms + 12 dashboard widgets
+./infra/lambda/package-fanout.sh         # one zip per source under build/
+./infra/lambda/02-deploy-fanout.sh       # 6 Lambdas + EventBridge rules (prod offsets)
+```
+
+Schedules per `docs/02-fan-out.md` §5:
+
+| Time (UTC) | Source        |
+|------------|---------------|
+| 02:50      | customers     |
+| 03:00      | loan_applications (Phase 1) |
+| 03:10      | credit_bureau_pulls |
+| 03:15      | loan_decisions |
+| 03:30      | loan_drawdowns |
+| 03:45      | payments      |
+| 04:00      | delinquencies |
+
+### 2. Smoke chain (manual, in order)
+
+```bash
+for fn in lending-customers-generator lending-bureau-pulls-generator \
+          lending-decisions-generator lending-drawdowns-generator \
+          lending-payments-generator lending-delinquencies-generator; do
+  aws lambda invoke --function-name "$fn" --region us-east-1 \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"trigger":"manual-smoke"}' "/tmp/out-$fn.json"
+  cat "/tmp/out-$fn.json"
+  echo
+done
+```
+
+Each downstream Lambda raises `ParentNotFound` if its parent partition
+hasn't landed yet — fix by re-running upstream first.
+
+### 3. Flip to test mode (anomaly engine + 6-hourly)
+
+```bash
+./infra/06-set-mode-fanout.sh test
+```
+
+Test-mode thresholds match the Phase 1 pattern:
+- MIN_ROWS lowered per source (400 / 200 / 50 — see `_env.sh`).
+- low-volume alarm thresholds re-tuned to the same floor.
+- freshness window 12h (two missed runs in a row).
+
+Switch back with `./infra/06-set-mode-fanout.sh prod`.
+
+### 4. DLQ inspection
+
+If an `lending-<source>-dlq-depth` alarm fires:
+
+```bash
+QUEUE_URL=$(aws sqs get-queue-url --queue-name lending-<source>-dlq \
+  --region us-east-1 --query 'QueueUrl' --output text)
+aws sqs receive-message --queue-url "$QUEUE_URL" --max-number-of-messages 5 \
+  --wait-time-seconds 1 --region us-east-1
+```
+
+The body is the EventBridge invocation payload. After diagnosing, drain
+with `aws sqs purge-queue --queue-url "$QUEUE_URL"`.
+
+### 5. End-to-end verification
+
+```bash
+.venv/bin/python -m pytest tests/test_fan_out_e2e.py -q
+```
+
+Asserts the cross-source FK graph is intact + temporal invariants
+(applied_at ≤ pulled_at ≤ decided_at on the same application).
+
+---
+
+## Phase 3+ — landed when the phases land
 
 Each subsequent phase appends a section here.

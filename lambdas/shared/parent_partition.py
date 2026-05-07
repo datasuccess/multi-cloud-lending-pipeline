@@ -61,10 +61,15 @@ def latest_success_partition(
     return _latest_success_local(parsed.key, source, before=before)
 
 
+def _raw_prefix(base_key: str, source: str) -> str:
+    stem = base_key.rstrip("/")
+    return f"{stem}/raw/{source}/" if stem else f"raw/{source}/"
+
+
 def _latest_success_s3(
     bucket: str, base_key: str, source: str, *, before: date | None
 ) -> str | None:
-    prefix = f"{base_key.rstrip('/')}/raw/{source}/"
+    prefix = _raw_prefix(base_key, source)
     paginator = _s3_client().get_paginator("list_objects_v2")
     candidates: list[str] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
@@ -126,7 +131,7 @@ def all_success_partitions_through(
     """
     parsed = parse_uri(base_uri)
     if parsed.is_s3:
-        prefix = f"{parsed.key.rstrip('/')}/raw/{source}/"
+        prefix = _raw_prefix(parsed.key, source)
         paginator = _s3_client().get_paginator("list_objects_v2")
         out: list[tuple[date, str]] = []
         for page in paginator.paginate(Bucket=parsed.bucket, Prefix=prefix):

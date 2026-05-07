@@ -19,9 +19,16 @@ def test_parse_uri_local():
     assert p.key == "/tmp/foo/bar"
 
 
-def test_parse_uri_rejects_malformed_s3():
+def test_parse_uri_bucket_only():
+    p = parse_uri("s3://only-bucket")
+    assert p.is_s3
+    assert p.bucket == "only-bucket"
+    assert p.key == ""
+
+
+def test_parse_uri_rejects_no_bucket():
     with pytest.raises(ValueError):
-        parse_uri("s3://only-bucket")
+        parse_uri("s3://")
 
 
 def test_join():

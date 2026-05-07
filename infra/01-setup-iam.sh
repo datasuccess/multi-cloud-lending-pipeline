@@ -107,9 +107,18 @@ GEN_POLICY="$(cat <<JSON
       "Resource": "arn:aws:s3:::${RAW_BUCKET}",
       "Condition": {
         "StringLike": {
-          "s3:prefix": ["_pipeline_runs/source=loan_applications/*"]
+          "s3:prefix": [
+            "_pipeline_runs/source=loan_applications/*",
+            "raw/customers/*"
+          ]
         }
       }
+    },
+    {
+      "Sid": "ReadCustomersParent",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::${RAW_BUCKET}/raw/customers/*"
     },
     {
       "Sid": "EncryptOnly",

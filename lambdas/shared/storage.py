@@ -28,7 +28,7 @@ def parse_uri(uri: str) -> ParsedUri:
     if uri.startswith("s3://"):
         without_scheme = uri[len("s3://") :]
         bucket, _, key = without_scheme.partition("/")
-        if not bucket or not key:
+        if not bucket:
             raise ValueError(f"Malformed S3 URI: {uri}")
         return ParsedUri(scheme="s3", bucket=bucket, key=key)
     return ParsedUri(scheme="file", bucket=None, key=uri)
